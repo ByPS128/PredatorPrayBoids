@@ -289,6 +289,50 @@ const NAME_SETS = [
 ];
 
 // -------------------------------------------------------------------------
+//  Archetypy planet — každý má vlastní paletu pásů (hluboké/mělké moře,
+//  pobřeží, nížinná/horská vegetace, skály, vrcholy/sníh, led) a parametry
+//  (poměr souš/voda, mraky, póly). Pro scénu se náhodně vybere jeden a navíc
+//  se paletě posune odstín/sytost/jas → velká pestrost i u stejného typu.
+// -------------------------------------------------------------------------
+const PLANET_TYPES = [
+  { name: 'terran',  deep:[12,40,90],  shoal:[28,100,135], beach:[206,196,150], low:[80,125,60],  high:[40,86,46],  rock:[120,104,80], peak:[238,242,250], ice:[235,240,250], sea:[0.48,0.58], cloudT:[0.55,0.68], cloudAmt:[0.6,0.9],  polar:[0.66,0.80] },
+  { name: 'desert',  deep:[60,80,70],  shoal:[95,120,100], beach:[226,200,150], low:[205,155,95], high:[165,110,70],rock:[150,95,65],  peak:[225,212,192], ice:[228,224,218], sea:[0.16,0.32], cloudT:[0.70,0.82], cloudAmt:[0.12,0.4], polar:[0.80,0.92] },
+  { name: 'ocean',   deep:[8,45,98],   shoal:[20,112,152], beach:[210,205,170], low:[85,132,72],  high:[45,95,55],  rock:[110,110,95], peak:[240,244,250], ice:[235,242,252], sea:[0.66,0.78], cloudT:[0.50,0.64], cloudAmt:[0.7,1.05], polar:[0.70,0.82] },
+  { name: 'ice',     deep:[60,110,150],shoal:[125,172,202],beach:[212,224,234], low:[200,212,225],high:[226,236,246],rock:[150,165,185],peak:[248,250,255], ice:[245,248,255], sea:[0.40,0.54], cloudT:[0.50,0.64], cloudAmt:[0.5,0.85], polar:[0.40,0.55] },
+  { name: 'jungle',  deep:[10,55,80],  shoal:[25,108,122], beach:[200,195,150], low:[50,125,52],  high:[20,80,35],  rock:[95,100,70],  peak:[230,238,235], ice:[235,240,245], sea:[0.42,0.55], cloudT:[0.46,0.58], cloudAmt:[0.85,1.15],polar:[0.74,0.86] },
+  { name: 'volcanic',deep:[20,24,38],  shoal:[48,52,70],   beach:[85,72,70],    low:[78,58,56],   high:[48,40,42],  rock:[62,52,54],   peak:[225,95,40],   ice:[120,120,130], sea:[0.40,0.55], cloudT:[0.60,0.74], cloudAmt:[0.3,0.6],  polar:[0.86,0.96] },
+  { name: 'amethyst',deep:[35,20,75],  shoal:[82,46,132],  beach:[202,172,202], low:[132,70,152], high:[90,45,112], rock:[112,92,122], peak:[236,230,246], ice:[236,232,246], sea:[0.45,0.60], cloudT:[0.55,0.68], cloudAmt:[0.4,0.8],  polar:[0.70,0.85] },
+  { name: 'teal',    deep:[8,60,72],   shoal:[20,122,122], beach:[200,205,180], low:[60,142,112], high:[30,100,80], rock:[100,120,110],peak:[235,245,242], ice:[235,245,245], sea:[0.50,0.62], cloudT:[0.55,0.68], cloudAmt:[0.5,0.85], polar:[0.70,0.84] },
+  { name: 'savanna', deep:[30,70,95],  shoal:[62,122,140], beach:[216,196,140], low:[172,152,82], high:[120,110,60],rock:[140,110,75], peak:[230,226,212], ice:[234,232,228], sea:[0.32,0.46], cloudT:[0.66,0.78], cloudAmt:[0.25,0.5], polar:[0.78,0.90] },
+];
+
+// RGB <-> HSV (pro posun odstínu/sytosti/jasu celé palety planety)
+function rgb2hsv(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = max(r, g, b), mn = min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d > 0) {
+    if (mx === r) h = ((g - b) / d) % 6;
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60; if (h < 0) h += 360;
+  }
+  return [h, mx ? d / mx : 0, mx];
+}
+function hsv2rgb(h, s, v) {
+  h = ((h % 360) + 360) % 360;
+  const c = v * s, x = c * (1 - abs((h / 60) % 2 - 1)), m = v - c;
+  let r, g, b;
+  if (h < 60) { r = c; g = x; b = 0; }
+  else if (h < 120) { r = x; g = c; b = 0; }
+  else if (h < 180) { r = 0; g = c; b = x; }
+  else if (h < 240) { r = 0; g = x; b = c; }
+  else if (h < 300) { r = x; g = 0; b = c; }
+  else { r = c; g = 0; b = x; }
+  return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+}
+
+// -------------------------------------------------------------------------
 //  Globální stav
 // -------------------------------------------------------------------------
 let entities = [];
@@ -308,6 +352,8 @@ let outroTimer = 0;          // odpočet vyhlášení vítěze
 let lore = null;             // aktuální "příběh": svět + frakce (název, barva, tvar, populace)
 let events = [];             // feed komentáře: {text, color, alpha}
 let factionStats = [];       // per frakce: {predation, starvation, kills, gone, lastOne}
+let planet = null;           // procedurální planeta do intra (jiná každou scénu)
+let planetBuffer = null;     // offscreen buffer pro vykreslení koule (recykluje se)
 
 // -------------------------------------------------------------------------
 //  SpatialGrid — prostorové dělení pro rychlé hledání sousedů
@@ -1069,6 +1115,201 @@ function generateLore() {
   lore = { theme: set.theme, world, factions };
 }
 
+// Vytvoř procedurální planetu do intra. Jednou za scénu vygenerujeme texturu
+//  (equirektangulární mapa moří/pevnin/ledu + mraky) a předpočítáme geometrii
+//  koule + osvětlení. Za běhu se pak jen levně "roluje" textura (rotace).
+function makePlanet() {
+  const R = round(constrain(min(width, height) * 0.14, 90, 160));
+  const texW = 384, texH = 192;   // vyšší rozlišení → ostřejší pobřeží/detail
+
+  // archetyp světa + posun celé palety (odstín/sytost/jas) → velká pestrost
+  const T = random(PLANET_TYPES);
+  const dh = random(-26, 26), ds = random(0.8, 1.2), dv = random(0.88, 1.14);
+  const J = (col) => {
+    const [h, s, v] = rgb2hsv(col[0], col[1], col[2]);
+    return hsv2rgb(h + dh, constrain(s * ds, 0, 1), constrain(v * dv, 0, 1));
+  };
+  const deepSea = J(T.deep), shoalSea = J(T.shoal), beach = J(T.beach);
+  const low = J(T.low), high = J(T.high), rock = J(T.rock), peak = J(T.peak), iceCol = J(T.ice);
+  const cloudCol = [245, 248, 255];
+  const atm = [lerp(shoalSea[0], 150, 0.5), lerp(shoalSea[1], 180, 0.5), lerp(shoalSea[2], 255, 0.5)];
+
+  const landThreshold = random(T.sea[0], T.sea[1]);   // poměr souš/voda dle typu
+  const cloudThreshold = random(T.cloudT[0], T.cloudT[1]);
+  const cloudStrength = random(T.cloudAmt[0], T.cloudAmt[1]);
+  const surfScale = random(2.0, 3.2), cloudScale = random(2.6, 4.2);
+  const warpAmt = random(0.25, 0.6);                  // domain warp → členitější pobřeží
+  const polar = random(T.polar[0], T.polar[1]);
+  const noff = random(1000), coff = random(1000), moff = random(1000), woff = random(1000);
+  const spin = random(0.12, 0.4) * (random() < 0.5 ? -1 : 1);
+  const cloudSpin = spin * random(1.4, 2.2);
+  const tilt = random(-0.45, 0.45);
+  const ambient = 0.10;
+
+  // fBm: součet oktáv šumu → členité pobřeží a detail (ne "rozlitá barva")
+  const fbm = (x, y, z, oct) => {
+    let a = 0.5, f = 1, s = 0, nrm = 0;
+    for (let o = 0; o < oct; o++) { s += a * noise(x * f, y * f, z * f); nrm += a; a *= 0.5; f *= 2; }
+    return s / nrm;
+  };
+  const mix3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+
+  // 1) výškové (H) a vlhkostní (M) pole — vzorkování šumu na 3D KOULI, aby byly
+  //    kontinenty izotropní (kulaté, rozházené jako na Zemi), ne svislé pruhy.
+  const Hf = new Float32Array(texW * texH);
+  const Mf = new Float32Array(texW * texH);
+  for (let j = 0; j < texH; j++) {
+    const lat = map(j, 0, texH - 1, HALF_PI, -HALF_PI);
+    const clat = cos(lat), slat = sin(lat);
+    for (let i = 0; i < texW; i++) {
+      const lon = map(i, 0, texW - 1, -PI, PI);
+      const ux = clat * cos(lon), uy = clat * sin(lon), uz = slat;   // bod na jednotkové kouli
+      // domain warp v 3D → zvlněná, realistická pobřeží
+      const wx = (fbm(woff + 1.6 * ux, woff + 1.6 * uy, woff + 1.6 * uz, 3) - 0.5) * warpAmt;
+      const wy = (fbm(woff + 11 + 1.6 * ux, woff + 11 + 1.6 * uy, woff + 11 + 1.6 * uz, 3) - 0.5) * warpAmt;
+      const wz = (fbm(woff + 23 + 1.6 * ux, woff + 23 + 1.6 * uy, woff + 23 + 1.6 * uz, 3) - 0.5) * warpAmt;
+      Hf[j * texW + i] = fbm(noff + surfScale * ux + wx, noff + surfScale * uy + wy, noff + surfScale * uz + wz, 6);
+      Mf[j * texW + i] = fbm(moff + 1.8 * ux, moff + 1.8 * uy, moff + 1.8 * uz, 3);
+    }
+  }
+
+  // 2) barvení (výškové pásy + biomy) a reliéfní stínování
+  const surf = new Uint8Array(texW * texH * 3);
+  const cloud = new Uint8Array(texW * texH);
+  for (let j = 0; j < texH; j++) {
+    const lat = map(j, 0, texH - 1, HALF_PI, -HALF_PI);
+    const latN = abs(lat) / HALF_PI;
+    for (let i = 0; i < texW; i++) {
+      const id = j * texW + i;
+      const e = Hf[id], m = Mf[id];
+      let c;
+      if (e < landThreshold) {
+        const depth = constrain((landThreshold - e) / landThreshold, 0, 1);
+        c = mix3(shoalSea, deepSea, depth * depth);          // mělčina → hloubka (rychlejší ztmavnutí)
+      } else {
+        const h = (e - landThreshold) / (1 - landThreshold); // 0..1 nadmořská výška
+        if (h < 0.05) c = mix3(beach, low, h / 0.05);        // pobřeží
+        else if (h < 0.5) c = mix3(low, high, constrain(m * 1.4 - 0.2, 0, 1)); // suchá nížina↔les
+        else if (h < 0.78) c = mix3(high, rock, (h - 0.5) / 0.28);
+        else c = mix3(rock, peak, (h - 0.78) / 0.22);        // sněžné vrcholy
+
+        // chladné vysoké šířky → sníh
+        if (latN > 0.6) c = mix3(c, peak, constrain((latN - 0.6) / 0.32, 0, 1) * 0.5);
+
+        // hillshade z gradientu výšky (slunce zleva nahoře) — dává reliéf
+        const il = (i - 1 + texW) % texW, ir = (i + 1) % texW;
+        const ju = max(0, j - 1), jd = min(texH - 1, j + 1);
+        const gx = Hf[j * texW + ir] - Hf[j * texW + il];
+        const gy = Hf[jd * texW + i] - Hf[ju * texW + i];
+        const sh = constrain(1 + (-gx - gy) * 3.5, 0.7, 1.3);
+        c = [c[0] * sh, c[1] * sh, c[2] * sh];
+      }
+      // polární led (na moři i souši)
+      if (latN > polar) {
+        const iceF = constrain(map(latN, polar, 1, 0, 1) * (0.55 + 0.45 * m), 0, 1);
+        c = mix3(c, iceCol, iceF);
+      }
+      const o = id * 3;
+      surf[o] = constrain(c[0], 0, 255); surf[o + 1] = constrain(c[1], 0, 255); surf[o + 2] = constrain(c[2], 0, 255);
+
+      // mraky (fBm na 3D kouli)
+      const lon = map(i, 0, texW - 1, -PI, PI);
+      const clat = cos(lat), ux = clat * cos(lon), uy = clat * sin(lon), uz = sin(lat);
+      const cn = fbm(coff + cloudScale * ux, coff + cloudScale * uy, coff + cloudScale * uz, 4);
+      cloud[id] = cn > cloudThreshold ? floor(map(cn, cloudThreshold, 1, 0, 255)) : 0;
+    }
+  }
+
+  // obrázek povrchu (použije se i jako tlumené pozadí hrací plochy)
+  const bg = createImage(texW, texH);
+  bg.loadPixels();
+  for (let t = 0; t < texW * texH; t++) {
+    const o = t * 3, q = t * 4;
+    bg.pixels[q] = surf[o]; bg.pixels[q + 1] = surf[o + 1];
+    bg.pixels[q + 2] = surf[o + 2]; bg.pixels[q + 3] = 255;
+  }
+  bg.updatePixels();
+
+  // offscreen buffer (recyklujeme, pokud sedí velikost)
+  const D = 2 * R;
+  if (!planetBuffer || planetBuffer.width !== D) {
+    planetBuffer = createGraphics(D, D);
+    planetBuffer.pixelDensity(1);
+  }
+  planetBuffer.clear();
+
+  // geometrie disku → koule + osvětlení (jednou)
+  let Lx = -0.55, Ly = -0.5, Lz = 0.66;
+  const Ll = sqrt(Lx * Lx + Ly * Ly + Lz * Lz); Lx /= Ll; Ly /= Ll; Lz /= Ll;
+  const cosT = cos(tilt), sinT = sin(tilt);
+  const idx = [], txf = [], rowBase = [], light = [], rim = [];
+  for (let py = 0; py < D; py++) {
+    const ny = (py - R + 0.5) / R;
+    for (let pxi = 0; pxi < D; pxi++) {
+      const nx = (pxi - R + 0.5) / R;
+      const r2 = nx * nx + ny * ny;
+      if (r2 > 1) continue;
+      const nz = sqrt(1 - r2);
+      const yt = ny * cosT - nz * sinT;     // rotace o -tilt kolem X → planet-space
+      const zt = ny * sinT + nz * cosT;
+      const lat = asin(constrain(yt, -1, 1));
+      const lon0 = atan2(nx, zt);
+      idx.push((py * D + pxi) * 4);
+      txf.push((lon0 + PI) / TWO_PI);
+      let row = floor(map(lat, HALF_PI, -HALF_PI, 0, texH - 1));
+      rowBase.push(constrain(row, 0, texH - 1) * texW);
+      light.push(constrain(nx * Lx + ny * Ly + nz * Lz, 0, 1));
+      rim.push(pow(1 - nz, 2.6));
+    }
+  }
+
+  planet = {
+    R, D, texW, texH, surf, cloud, bg,
+    idx: Int32Array.from(idx), txf: Float32Array.from(txf),
+    rowBase: Int32Array.from(rowBase), light: Float32Array.from(light), rim: Float32Array.from(rim),
+    spin, cloudSpin, ambient, cloudStrength, cloudCol, atm,
+  };
+}
+
+// Vykresli rotující planetu (atmosférická záře + textura přes kouli, fade `alpha`).
+function renderPlanet(cx, cy, alpha) {
+  const pl = planet;
+  if (!pl) return;
+
+  // atmosférická záře za planetou
+  const ctx = drawingContext;
+  ctx.save();
+  const grad = ctx.createRadialGradient(cx, cy, pl.R * 0.92, cx, cy, pl.R * 1.42);
+  grad.addColorStop(0, `rgba(${pl.atm[0] | 0},${pl.atm[1] | 0},${pl.atm[2] | 0},${0.4 * alpha})`);
+  grad.addColorStop(1, `rgba(${pl.atm[0] | 0},${pl.atm[1] | 0},${pl.atm[2] | 0},0)`);
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(cx, cy, pl.R * 1.42, 0, TWO_PI); ctx.fill();
+  ctx.restore();
+
+  const buf = planetBuffer; buf.loadPixels();
+  const px = buf.pixels, surf = pl.surf, cloud = pl.cloud, texW = pl.texW;
+  const spinFrac = (introTimer * pl.spin) / texW;
+  const cloudFrac = (introTimer * pl.cloudSpin) / texW;
+  const amb = pl.ambient, cs = pl.cloudStrength, cc = pl.cloudCol, atm = pl.atm;
+  const N = pl.idx.length;
+  for (let k = 0; k < N; k++) {
+    const base = pl.rowBase[k];
+    let f = pl.txf[k] + spinFrac; f -= floor(f);
+    const o = (base + ((f * texW) | 0)) * 3;
+    const lf = amb + (1 - amb) * pl.light[k];
+    let r = surf[o] * lf, g = surf[o + 1] * lf, b = surf[o + 2] * lf;
+    let cf = pl.txf[k] + cloudFrac; cf -= floor(cf);
+    const ca = cloud[base + ((cf * texW) | 0)] / 255 * cs * lf;
+    if (ca > 0) { r += (cc[0] - r) * ca; g += (cc[1] - g) * ca; b += (cc[2] - b) * ca; }
+    const rm = pl.rim[k];
+    r += atm[0] * rm * 0.5; g += atm[1] * rm * 0.5; b += atm[2] * rm * 0.5;
+    const p = pl.idx[k];
+    px[p] = r > 255 ? 255 : r; px[p + 1] = g > 255 ? 255 : g; px[p + 2] = b > 255 ? 255 : b; px[p + 3] = 255;
+  }
+  buf.updatePixels();
+  push(); tint(255, 255 * alpha); image(buf, cx - pl.R, cy - pl.R); pop();
+}
+
 // Rozmísti startovní zóny: F*zonesPerFaction bodů po ploše tak, aby každé dva
 //  měly aspoň minZoneDistance. Rejection sampling; když se to nepovede (odstup
 //  je na danou plochu nereálný), odstup se chytře zmenší a zkusí znovu.
@@ -1168,6 +1409,7 @@ function lossCause(f) {
 // Začni úplně novou scénu (R / start): nový příběh + intro.
 function startNewScene() {
   generateLore();
+  makePlanet();
   spawnScene();
   sceneState = 'INTRO';
   fadeAlpha = 1;
@@ -1345,6 +1587,7 @@ function setup() {
 
 function draw() {
   background(CONFIG.background[0], CONFIG.background[1], CONFIG.background[2]);
+  drawWorldBackground();   // tlumený povrch planety jako pozadí hrací plochy
 
   // grid přestavujeme každý snímek (entity se pohnuly)
   rebuildGrid();
@@ -1415,9 +1658,15 @@ function drawIntro() {
     lines.push({ faction: f, text: `${f.name} — ${f.count} členů`, size: 22, col: f.color });
   }
 
-  const lineH = 46;
-  const totalH = lines.length * lineH;
-  let y = height / 2 - totalH / 2 + lineH / 2;
+  // animovaná planeta nahoře (nabíhá s prvním řádkem)
+  const planetR = planet ? planet.R : 120;
+  const planetCy = height * 0.30;
+  const pa = constrain(introTimer / S.introLineFade, 0, 1);
+  renderPlanet(width / 2, planetCy, pa);
+
+  // titulky pod planetou
+  const lineH = 44;
+  let y = planetCy + planetR + 46;
 
   push();
   textAlign(CENTER, CENTER);
@@ -1481,6 +1730,22 @@ function drawFactionGlyph(x, y, shapeIdx, size, col, alpha) {
   beginShape();
   for (const p of SHAPES[shapeIdx]) vertex(p[0] * size, p[1] * size);
   endShape(CLOSE);
+  pop();
+}
+
+// Pozadí hrací plochy = povrch planety z intra (ztmavený + ztlumený, ať jasné
+//  entity vyniknou). Boids se tak pohybují "nad povrchem" právě toho světa.
+function drawWorldBackground() {
+  if (!planet || !planet.bg) return;
+  push();
+  // mírné ztmavení přes tint (násobí barvy) — povrch zůstane čitelný, ale tlumený
+  tint(150, 158, 172);
+  image(planet.bg, 0, 0, width, height);
+  noTint();
+  // jemné ztlumení k základní barvě pozadí, ať textura nepřebíjí entity
+  noStroke();
+  fill(CONFIG.background[0], CONFIG.background[1], CONFIG.background[2], 90);
+  rect(0, 0, width, height);
   pop();
 }
 
