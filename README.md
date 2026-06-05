@@ -20,24 +20,37 @@ python -m http.server 8123
 
 - **H** — legenda (co znamenají barvy/velikosti/stavy + pravidla chování)
 - **Mezerník** — pauza / běh
-- **D** — detailní (debug) overlay: zorné kužely, proxy, vektory sil, sonda
+- **D** — detailní (debug) overlay: zorné kužely, proxy, vektory sil, sonda,
+  obálky a síla squadů
 - **R** — restart / nová scéna
+- **−** / **+** — zpomalit / zrychlit simulaci (slow-motion pro pozorování)
+- **0** — normální rychlost
 
 ## Co se ve scéně děje
 
 - Entita má **frakci** (barva + tvar), dynamickou **roli** (predátor/kořist),
-  stálou **povahu** (ochránce/útočník) a vnitřní stav: **hlad, strach, odvahu,
-  energii a staminu**.
+  stálou **povahu** (ochránce/útočník), stálou **sílu** a osobní **odvahu**,
+  a vnitřní stav: **hlad, strach, energii a staminu**.
 - **Vnímání**: zorný kužel ve směru pohybu + malý „proxy" poloměr (sluch).
-- **Lov**: hladová entita pronásleduje cizí kořist (s predikcí pohybu),
-  po úlovku se nasytí a chvíli odpočívá.
+- **Souboj = ukusování (ne dotyk = smrt)**: lovec i bránící se kořist si
+  navzájem **ukusují energii** (= život), dokud jeden nepadne. Silnější a méně
+  zadýchaný vyhrává; vítěz z boje vyjde vyčerpaný. Sežrání **nasytí** (utiší hlad
+  a doplní energii).
+- **Squady (sdílená informace)**: spojenci nablízku tvoří skupinu, která sdílí,
+  **jak je silná** a **co kolektivně vidí** — i zadák, který sám nepřítele
+  nevidí, „ví", kde je. Nevyrovnané střety se proto **commitnou** (přesila jde
+  do útoku), vyrovnané zůstávají obezřetné.
+- **Rally a obkličování**: jde-li spojenec do boje, ostatní (podle role, odvahy,
+  únavy a převahy) **přiběhnou na pomoc** z více směrů → kořist se sevře.
 - **Strach vs. odvaha**: kořist prchá (tři strategie — k hejnu, klička, smůla),
-  ochránci se vmezeřují mezi spojence a hrozbu.
-- **Síla v počtech**: přesila láká k útoku, sevřené hejno útočníka odradí;
-  vtržení predátora hejno rozprašuje.
-- **Energie a stamina**: pohyb řídí zásoba sil (kdo dlouho nejedl, slábne a může
-  umřít hlady) a krátkodobý sprint (přepálení → zadýchání). Zranění se léčí
-  v hejnu, kde jim zdraví spojenci darují energii.
+  nebo se **postaví a bojuje** (má-li odvahu, nebo je-li zahnaná do kouta).
+  **Hlad dělá odvahu** — vyhladovělí riskují až běsní (konec scény = hladové
+  střety, ne strnulost). Ochránci se vmezeřují mezi spojence a hrozbu.
+- **Síla v počtech**: přesila (počtem i silou) láká k útoku, silný/sevřený
+  protivník útočníka odradí.
+- **Energie a stamina**: pohyb řídí zásoba sil (kdo dlouho neuloví, slábne a může
+  umřít hlady) a krátkodobý sprint (přepálení → zadýchání). Zranění se po boji
+  léčí v hejnu, kde jim zdraví spojenci darují přebytek energie.
 - **Smršťující se aréna**: ubývá-li entit, hrací plocha se zužuje (a vpravo roste
   panel s legendou a komentářem), aby se poslední přeživší potkali.
 - **Konec scény**: když přežije jediná frakce, vyhlásí se vítěz a začne nová
@@ -68,21 +81,28 @@ pohyb. Níže je popis věrný kódu (`Entity.update()` v `sketch.js`).
 - **Povaha (`character`)** — `PROTECTOR` (ochránce) nebo `ATTACKER` (útočník).
   Neměnná, přidělená při zrození. Mění *váhy* chování (viz níže).
 - **Odvaha (`courage`, 0..1)** — neměnná osobní konstanta proti strachu.
+- **Síla (`strength`)** — neměnná, **viditelná** (soupeř ji při rozhodování
+  o útoku zváží). Určuje tempo ukusování a váhu v poměru sil. (Později ji přebije
+  klan; skrytý „skill" — mířit na slabiny / lepší úhyb — přijde v další fázi.)
+- **Osobní prostor (`spacing`)** — jak blízko snese ostatní v hejnu (mírný
+  rozptyl, ať hejno nevypadá mřížkovaně).
 
 **Role (dynamická, přepočítává se každý snímek):**
 - `PREDATOR` (lovec) vs. `PREY` (kořist) — **není napevno!** Entita se stává
   lovcem, jen když má hlad nad prahem, neutíká, není nasycená a vidí kořist,
   na kterou si troufne. Jinak je kořist.
 
-**Vnitřní stavy (0..1, dynamické):**
-- **Hlad (`hunger`)** — roste v čase; nad prahem pohání lov. Po úlovku spadne
-  (nasycení) a entita chvíli neloví.
-- **Energie (`energy`)** — dlouhodobá „síla". Klesá metabolismem (sprint rychleji),
-  doplní se úlovkem. **Při 0 = smrt hladem.** Řídí cruise rychlost.
-- **Stamina** — krátkodobý sprint. Vybíjí se během sprintu, regeneruje v klidu.
-  Vyčerpání → **zadýchání** (dočasné zpomalení).
-- **Strach (`fear`)** — roste přítomností hrozby, klesá v bezpečí. Proti odvaze
-  rozhoduje útěk vs. setrvání.
+**Vnitřní stavy (dynamické):**
+- **Hlad (`hunger`, 0..1)** — roste v čase; nad prahem pohání lov a navíc **dodává
+  odvahu** (desperation). **Klesá jedením** (ukusováním kořisti).
+- **Energie (`energy`, 0..~1.3)** — dlouhodobá „síla" a zároveň **život**. Klesá
+  metabolismem, sprintem a soubojem; ukusováním klesá oběti a **doplňuje se
+  útočníkovi**. **Při 0 = smrt** (hlady nebo sežráním). Řídí cruise rychlost.
+  Nad prahem sytosti (plné břicho) entita přestane shánět nové cíle a zpomalí.
+- **Stamina** — krátkodobý sprint. Vybíjí se sprintem i soubojem, regeneruje
+  v klidu. Vyčerpání → **zadýchání** (zpomalení a slabší kousnutí).
+- **Strach (`fear`, 0..1)** — roste přítomností hrozby (hlavně té, co aktivně
+  loví / jde po mně), klesá v bezpečí. Proti odvaze rozhoduje útěk / boj / klid.
 
 ### Vnímání
 Entita **nevidí 360°**. Vnímá ve dvou složkách:
@@ -100,30 +120,40 @@ v daný snímek vnímá**.
   vysoká = svižný pohyb. Hlad **nedává** rychlost zadarmo — to dělá až sprint.
 - **Stamina → sprint:** umožní krátký výtrysk rychlosti (lov i útěk); přepálení
   vede k zadýchání a zpomalení → sázka, kdy ji utratit.
-- **Strach vs. odvaha (+ hejno):** rozhoduje útěk/obranu. Blízké hejno dodává
-  odvahu (čím víc spojenců, tím statečnější, do stropu).
-- **Početní převaha:** jeden výpočet poměru sil (já + spojenci vs. cizí + jeho
-  spojenci) řídí **současně** strach (přečíslený cizí je míň děsivý) i ochotu
-  zaútočit.
+- **Strach vs. odvaha (+ hejno + hlad):** rozhoduje útěk / boj / klid. Odvahu
+  dodává **velikost squadu** (i zadák ví, že je nás hodně) a hlavně **hlad**
+  (vyhladovělý riskuje až běsní) — proti tomu stojí strach.
+- **Síla squadů:** porovnání **síly celé skupiny vs. síly viditelného nepřítele**
+  (síla = počet × `strength` × zdraví) řídí **současně** strach (přečíslení =
+  děsivější) i ochotu zaútočit; **drtivá převaha → povinný útok**. Síla i
+  zranění (nízká energie) cíle jsou **viditelné**, skrytý skill ne.
 
 ### Rozhodovací logika (každý snímek, v pořadí priorit)
-1. **Vnímání** → rozdělí okolí na spojence a cizí; spočítá vlastní „sílu hejna".
-2. **Hrozba a strach** → z cizích spočítá míru ohrožení (hlad cizího × početní
-   poměr + bonus, pokud aktivně loví nebo **jde přímo po mně**), z toho roste
-   strach a směr „pryč od hrozeb".
-3. **Útěk?** Pokud `strach > odvaha` (s hysterezí, ať to nebliká) → **režim
-   útěku** (potlačí lov i poflakování).
-4. **Lov?** Pokud neutíká, má hlad a vidí kořist, na kterou si troufne → **lov**.
-   Cíl si **drží se závazkem** (commitment) i krátce mimo dohled, dokud ho
-   nechytí, neztratí (moc daleko), nebo ho neodradí přesila.
-5. **Léčení** zraněného (viz níže).
-6. **Energie/stamina/rychlost** → spočítá aktuální max rychlost a případný sprint.
-7. **Síly pohybu** (váženo poměrem podle role/povahy/stavu): rozestup +
-   srovnání směru + soudržnost hejna, a navrch buď útěk, lov, ochrana, nebo
-   poflakování; nakonec odpor od kraje arény.
-8. **Setrvačnost** → směr se smí otočit jen o omezený úhel (klesá s rychlostí):
-   rychlý dělá široké oblouky, pomalý kličkuje ostře; z pravé do levé zatáčky
-   se vždy projde rovně (žádné skoky).
+1. **Squady** (před cyklem) → spojenci nablízku se shluknou; spočítá se síla
+   skupiny a kolektivní odhad nepřítele (sdílí ho i ti, kdo sami nevidí).
+2. **Vnímání** → rozdělí okolí na spojence a cizí.
+3. **Hrozba a strach** → z cizích spočítá míru ohrožení (hlavně z toho, že cizí
+   aktivně loví / **jde přímo po mně**, jen mírně z jeho hladu; škáluje to poměr
+   síly squadů), z toho roste strach a směr „pryč od hrozeb".
+4. **Postoj: klid / útěk / boj** → strach proti odvaze (odvaha = povaha + squad +
+   **hlad**). Vysoký strach → **útěk**; dost odvahy nebo **zahnání do kouta** →
+   **postavit se a bojovat**. Rozhodnutí má **setrvačnost** (drží se chvíli,
+   nepřehodnocuje se každý snímek), dokud ho nepřeruší cíl/hrozba zmizí, panika,
+   nebo past.
+5. **Lov?** Pokud neutíká, má hlad a vidí kořist, na kterou si **troufne** (síla
+   squadu vs. nepřítel) → **lov**. Cíl si **drží se závazkem** i krátce mimo
+   dohled. Na jeden cíl smí **omezený počet** útočníků (férovost soubojů).
+6. **Souboj (ukusování)** → je-li nepřítel na dosah, ukousne mu kus energie
+   (a on jemu); jídlo utiší hlad a doplní energii.
+7. **Rally** → kdo nemá vlastní cíl, ale jeho squad bojuje, vyrazí (podle ochoty)
+   k těžišti nepřítele na pomoc.
+8. **Léčení** zraněného (mimo boj; viz níže).
+9. **Energie/stamina/rychlost** → max rychlost, sprint, zpomalení v tlačenici.
+10. **Síly pohybu** (váženo podle role/povahy/stavu): rozestup + srovnání směru +
+    soudržnost hejna, a navrch buď útěk, lov, boj, rally, ochrana, nebo
+    poflakování; nakonec odpor od kraje arény.
+11. **Setrvačnost pohybu** → směr se smí otočit jen o omezený úhel (klesá
+    s rychlostí): rychlý dělá široké oblouky, pomalý kličkuje ostře.
 
 ### Hejno: kdy a proč se připojí / odpojí
 - **Připojení:** jakmile entita vnímá spojence, **soudržnost** (cohesion) ji
@@ -136,18 +166,31 @@ v daný snímek vnímá**.
   - **Útěk:** strach přebije hejnové síly (viz panika níže).
   - **Zranění:** naopak posílí touhu být v hejnu (hledá pomoc/healing).
 
-### Lov a skupinové napadání (síla v počtech)
-- Lovec míří na **nejbližší vnímanou kořist, na kterou si troufne** (predikuje
-  její budoucí pozici) a na blízko **vystartuje sprintem**; v dosahu úlovku ji
-  sní (nasytí se, doplní energii).
-- **Deterrence:** na kořist obklopenou **velkým, sevřeným hejnem** lovec
-  nezaútočí — hrozí, že „dostane nařez". Čím větší ochrana kořisti, tím nižší
-  ochota. Hlad a povaha ATTACKER tu opatrnost srážejí (zoufalý/útočný riskuje).
-- **Emboldenment (opak):** je-li cizí **přečíslený**, spojenci se ho přestanou
-  bát a **společně ho doženou** — vzniká přirozené skupinové napadání osamělců.
+### Lov, souboj a skupinové napadání (síla v počtech)
+- Lovec míří na **nejbližší kořist, na kterou si troufne** (predikuje její pohyb)
+  a na blízko **vystartuje sprintem**. V dosahu se rozpoutá **souboj**.
+- **Souboj = oboustranné ukusování.** Útočník i bránící se kořist si navzájem
+  ukusují **energii**; tempo = `strength × stamina` (zadýchaný kouše slaběji).
+  Z ukousnutého se vstřebá většina, zbytek je „režie" → energie ze světa pomalu
+  ubývá, takže duel vždy dospěje k vítězi. **Vítěz je vyčerpaný** a může pak sám
+  padnout hlady. Sežrání **utiší hlad a doplní energii**.
+- **Útočník a jeho cíl se smí překrývat** (válejí se po sobě), spojenci se smí
+  u fronty namačkat na těsno a kolem cizího protáhnout — aby se do kotle zapojilo
+  co nejvíc členů. Na jeden cíl ale smí najednou útočit jen **omezený počet**
+  (řídí konstanta — 1 = férový 1v1, víc = smečka).
+- **Deterrence:** na **silnějšího nebo přečísleného** protivníka (síla celého
+  squadu vs. viditelný nepřítel) lovec nezaútočí. Hlad a povaha ATTACKER tu
+  opatrnost srážejí; **drtivá převaha** ji vypne úplně (povinný útok).
+- **Skupinové napadání + obkličování:** jde-li spojenec do boje, ostatní z squadu
+  (i ti, co nepřítele sami nevidí) **vyrazí na pomoc** k těžišti nepřítele
+  z různých směrů → osamělec/menšina se **sevře**. Unavení a zranění se přitom
+  drží ve **2. linii**, dokud squad vede; při zvratu se zapojí i oni.
 
 ### Strach, útěk a rozpad hejna (panika)
-Když se entita rozhodne utéct, podle situace volí strategii:
+Pod tlakem se entita buď **postaví a bojuje** (má-li dost odvahy — kterou zvyšuje
+hejno a hlavně **hlad** — nebo je-li **zahnaná do kouta** a útěk nikam nevede),
+nebo **utíká**. Vyhladovělý se proto spíš pere než prchá. Když se rozhodne utéct,
+podle situace volí strategii:
 1. **Ke spojencům** — vidí-li hejno, prchá od hrozby a zároveň míří do středu
    hejna pro ochranu.
 2. **Slepý útěk + klička** — bez spojenců prchá pryč a **kličkuje jako zajíc**
@@ -234,14 +277,18 @@ významu, typického rozsahu a **jednotek**.
 ### Vnímání, grid, boids, kolize
 | Parametr | Význam | Rozsah | Jednotka |
 |---|---|---|---|
-| `perception.visionRange` | dosah zorného kužele | 80–120 | px |
+| `perception.visionRange` | dosah zorného kužele | 90–130 | px |
 | `perception.visionAngle` | šíře kužele | 100–160 | ° |
-| `perception.proxyRange` | „sluch" kolem dokola | 25–45 | px |
+| `perception.proxyRange` | „sluch" kolem dokola | 35–60 | px |
 | `grid.cellSize` | buňka mřížky (≥ největší dotaz) | ~60 | px |
 | `boids.separationRange` / `…Weight` | odstup / síla rozestupu | 32 / 2.6 | px / váha |
 | `boids.alignmentWeight` / `cohesionWeight` | srovnání směru / držení hejna | 1.0 / 0.9 | váha |
+| `boids.personalSpace` | per-entita násobek odstupu (osobní prostor) | [0.8, 1.2] | násobič |
 | `collision.bodyRadius` | poloměr těla (2× = min. odstup) | 5–8 | px |
 | `collision.iterations` / `push` | průchody / díl rozhrnutí | 2 / 0.5 | ks / podíl |
+| `collision.allyTightFactor` | sevření spojenců u fronty (násobek podlahy) | 0.45 | podíl |
+| `collision.combatOverlapFactor` | překryv útočník↔cíl (0 = úplný) | 0.0 | podíl |
+| `collision.enemySqueezeFactor` | protažení kolem cizího | 0.5 | podíl |
 
 ### Aréna a životní cyklus scény
 | Parametr | Význam | Rozsah | Jednotka |
@@ -262,16 +309,16 @@ významu, typického rozsahu a **jednotek**.
 | Parametr | Význam | Rozsah | Jednotka |
 |---|---|---|---|
 | `hunt.hungerStart` | počáteční hlad (rozsah) | [0, 0.2] | stav 0..1 |
-| `hunt.hungerRate` | přírůstek hladu | 0.0011 | stav/snímek |
+| `hunt.hungerRate` | přírůstek hladu v čase | 0.0011 | stav/snímek |
 | `hunt.huntThreshold` | práh hladu pro lov | 0.45 | stav 0..1 |
-| `hunt.killRange` | vzdálenost úlovku | 12 | px |
-| `hunt.satiationFrames` | délka nasycení | 180 | snímky |
+| `hunt.satiationFull` | energie, nad níž je „sytá" (neloví, zpomalí) | 1.0 | stav |
+| `hunt.satiatedSpeedFactor` | zpomalení syté entity | 0.5 | násobek cruise |
+| `hunt.feedFactor` | jak silně jídlo **tiší hlad** | 1.0 | násobič |
 | `hunt.pursueWeight` / `predictFrames` | síla honu / predikce | 2.4 / 12 | váha / snímky |
 | `hunt.lockFrames` / `maxChase` | závazek k cíli / vzdání | 50 / 160 | snímky / px |
-| `energy.start` | počáteční energie (rozsah) | [0.6, 1.0] | stav 0..1 |
-| `energy.metabolism` / `sprintDrain` | pokles klid / sprint | 0.0001 / 0.0005 | stav/snímek |
-| `energy.eatGain` / `maxEnergy` | doplnění úlovkem / strop | 0.6 / 1.3 | stav |
-| `energy.minCruise` | cruise při energii 0 (násobek base) | 0.45 | podíl |
+| `energy.start` | počáteční energie (rozsah) | [0.6, 1.0] | stav |
+| `energy.metabolism` / `sprintDrain` | pokles klid / sprint | 0.00005 / 0.0005 | stav/snímek |
+| `energy.maxEnergy` / `minCruise` | strop (lze se přejíst) / cruise při 0 | 1.3 / 0.45 | stav / podíl |
 | `stamina.regen` / `drain` | regenerace / vybíjení | 0.012 / 0.020 | stav/snímek |
 | `stamina.sprintMult` / `windedFactor` | rychlost sprintu / zadýchání | 1.8 / 0.6 | násobek cruise |
 | `stamina.engageRange` / `panicRange` | kdy sprint lov / útěk | 72 / 82 | px |
@@ -280,11 +327,16 @@ významu, typického rozsahu a **jednotek**.
 | Parametr | Význam | Rozsah | Jednotka |
 |---|---|---|---|
 | `courageStart` | počáteční odvaha (rozsah, neměnná) | [0.2, 0.85] | stav 0..1 |
+| `strengthStart` | síla (rozsah, neměnná, **viditelná**) | [0.7, 1.3] | násobič |
 | `character.protectorRatio` | podíl PROTECTOR (zbytek ATTACKER) | 0.5 | podíl |
 | `fear.riseRate` / `decay` / `safeDecayBonus` | růst / pokles / v bezpečí | 0.05 / 0.01 / 0.02 | stav/snímek |
+| `fear.baseThreat` / `hungerThreat` | pasivní hrozba cizího / příspěvek jeho hladu | 0.15 / 0.25 | příspěvek hrozby |
 | `fear.predatorMenace` / `targetedBonus` | děsivost lovce / „jde po mně" | 0.45 / 0.6 | příspěvek hrozby |
-| `fear.allyBravery` / `allyBraveryMax` | odvaha za spojence / strop | 0.05 / 0.35 | stav |
-| `deter.numMin` / `numMax` | meze škály početní převahy | 0.3 / 2.5 | násobič |
+| `fear.allyBravery` / `allyBraveryMax` | odvaha za člena squadu / strop | 0.05 / 0.35 | stav |
+| `fear.hungerBravery` | **hlad → odvaha** (desperation) | 0.6 | stav |
+| `fear.fightCourage` | práh odvahy „postavit se a bojovat" | 0.6 | stav |
+| `fear.fightBiasRange` / `trappedFrames` / `breakOffFear` | sklon boj-útěk / past / vytržení z boje | 0.15 / 30 / 0.92 | stav / snímky / stav |
+| `deter.numMin` / `numMax` | meze škály silové převahy | 0.3 / 2.5 | násobič |
 | `deter.baseRatio` | potřebná převaha k útoku | 1.1 | poměr sil |
 | `deter.hungerBravado` / `attackerBravado` | sleva za hlad / ATTACKER | 0.8 / 0.25 | poměr |
 | `flee.weight` / `toAlliesWeight` | síla útěku / k spojencům | 2.8 / 1.6 | váha |
@@ -292,5 +344,33 @@ významu, typického rozsahu a **jednotek**.
 | `protect.weight` / `allyFearTrigger` | síla obrany / práh strachu spojence | 2.2 / 0.4 | váha / stav |
 | `protect.interposeBias` / `riskMargin` | kam se vmezeří / rezerva rizika | 0.45 / 0.15 | podíl / stav |
 | `heal.seekThreshold` / `seekBoost` | „zraněn" pod / boost koheze | 0.45 / 2.0 | stav / násobič |
-| `heal.comfortThreshold` / `donorRate` | komfort / tempo darování | 0.7 / 0.0012 | stav / stav/snímek |
-| `charMods` | modifikace vah dle povahy (kohéze, protect, práh lovu, pursue) | — | násobiče / posun |
+| `heal.comfortThreshold` / `donorRate` | komfort / tempo darování | 0.55 / 0.0012 | stav / stav/snímek |
+| `charMods` | modifikace vah dle povahy (kohéze, protect, práh lovu, pursue, rally) | — | násobiče / posun |
+
+### Souboj (ukusování)
+| Parametr | Význam | Rozsah | Jednotka |
+|---|---|---|---|
+| `combat.biteRange` | dosah, na který se ukusuje | 14 | px |
+| `combat.biteBase` | základní ukousnutí (×síla ×stamina) | 0.011 | stav/snímek |
+| `combat.biteEfficiency` | kolik z ukousnutého se vstřebá (zbytek = režie) | 0.85 | podíl |
+| `combat.exertionEnergy` / `exertionStamina` | výdej energie / staminy v boji | 0.0006 / 0.018 | stav/snímek |
+| `combat.engagedSeparation` | ztlumení odstupu od bojujícího spojence | 0.2 | násobič |
+| `combat.maxAttackersPerTarget` | kolik nepřátel smí útočit na jeden cíl (1 = férový 1v1) | 5 | ks |
+| `combat.slotRange` | jak blízko musí útočník být, aby „obsadil slot" cíle | 90 | px |
+
+### Squady a rally (skupinová taktika)
+| Parametr | Význam | Rozsah | Jednotka |
+|---|---|---|---|
+| `squad.radius` | dosah připojení spojence k squadu (řetězí se) | 70 | px |
+| `squad.sightRange` | kolektivní dohled squadu na nepřátele | 120 | px |
+| `squad.overwhelm` | poměr síly, nad nímž je útok povinný (vypne opatrnost) | 2.2 | poměr |
+| `rally.weight` / `threshold` | síla rally / práh ochoty pomoct | 1.8 / 0.5 | váha / skóre |
+| `rally.maxRange` | dál od ohniska boje se nerozbíhá | 280 | px |
+| `rally.courageW` / `fearW` / `advW` | vliv odvahy / strachu / převahy na ochotu | 0.35 / 0.45 / 0.3 | váha |
+| `rally.tiredHold` / `desperation` | práh únavy pro 2. linii / poměr, kdy se i hájení zapojí | 0.4 / 0.9 | stav / poměr |
+
+### Tlačenice a setrvačnost rozhodnutí
+| Parametr | Význam | Rozsah | Jednotka |
+|---|---|---|---|
+| `crowd.radius` / `full` / `minFactor` | poloměr / počet pro max zpomalení / nejnižší rychlost | 22 / 5 / 0.55 | px / ks / podíl |
+| `decision.holdFrames` / `jitter` | jak dlouho se drží postoj / náhodný přídavek | 20 / 14 | snímky |

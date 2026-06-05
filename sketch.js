@@ -75,9 +75,9 @@ const CONFIG = {
   //  2) proxy spot — malý poloměr kolem dokola (sluch / blízká detekce).
   // Cokoli mimo kužel i mimo proxy entita "nevidí".
   perception: {
-    visionRange: 95,         // dosah zorného kužele
+    visionRange: 105,         // dosah zorného kužele
     visionAngle: 130,        // úhel kužele ve stupních (celková šíře)
-    proxyRange: 34,          // poloměr blízké detekce (sluch) — kolem dokola
+    proxyRange: 35,          // poloměr blízké detekce (sluch) — kolem dokola
   },
 
   // --- Boids (klasické hejnové chování v rámci frakce) ---
@@ -86,6 +86,8 @@ const CONFIG = {
     separationWeight: 2.6,   // síla "nenarážej do druhých" (měkké vyhýbání)
     alignmentWeight: 1.0,    // síla srovnání směru se spojenci
     cohesionWeight: 0.9,     // síla držet se ke středu hejna
+    personalSpace: [0.8, 1.2], // OSOBNÍ PROSTOR: per-entita násobek separationRange (přiděleno
+                               //   při spawnu) — mírný rozptyl, ať hejno nevypadá mřížkovaně
   },
 
   // --- Kolize (tvrdé rozhrnutí překryvů — těla se nesmí prolnout) ---
@@ -95,6 +97,10 @@ const CONFIG = {
     bodyRadius: 6,           // poloměr "těla"; dvě entity se nepřiblíží blíž než 2× tohle
     iterations: 2,           // počet relaxačních průchodů za snímek (víc = pevnější)
     push: 0.5,               // jak velký díl překryvu se odstraní za průchod (0.5 = symetricky půl/půl)
+    // Při SOUBOJI se rozhrnovací podlaha změkčuje (násobky normální podlahy bodyRadius*2):
+    allyTightFactor: 0.45,   // spojenci u fronty (aspoň jeden engaged) se smí přimáčknout na těsno
+    combatOverlapFactor: 0.0,// útočník ↔ jeho cíl: 0 = smí se úplně překrýt (válejí se po sobě)
+    enemySqueezeFactor: 0.5, // kolem NEbojujícího cizího se lze protáhnout na těsno (průnik do kotle)
   },
 
   // --- Aréna (smršťující se hrací prostor) ---
@@ -142,11 +148,12 @@ const CONFIG = {
     hungerRate: 0.0011,      // přírůstek hladu za snímek (~7 s k prahu lovu)
     huntThreshold: 0.45,     // od jakého hladu je entita ochotná lovit (PREDATOR)
 
-    satiatedSpeedFactor: 0.5,// nasycená entita zpomalí (násobek cruise rychlosti)
-
-    killRange: 12,           // na jakou vzdálenost predátor kořist "sní"
-    satiationHunger: 0.05,   // hlad po nasycení spadne na tuto hodnotu
-    satiationFrames: 180,    // jak dlouho (snímků) trvá nasycení (~3 s)
+    // NASYCENÍ podle plného břicha (ne časovač po killu): jakmile energie přeleze
+    // satiationFull, entita přestane shánět NOVÉ cíle a zpomalí. Po vyčerpávajícím
+    // souboji (kde režie sežrala zisk) zůstane hladová a může lovit dál / léčit se.
+    satiationFull: 1.0,      // nad touto energií je entita "sytá" (přestane shánět nové cíle)
+    satiatedSpeedFactor: 0.5,// sytá entita zpomalí (násobek cruise rychlosti)
+    feedFactor: 1.0,         // jak silně snědená porce TIŠÍ HLAD (hunger -= vstřebané × tohle)
 
     pursueWeight: 2.4,       // váha pronásledování kořisti
     predictFrames: 12,       // o kolik snímků dopředu predikovat pohyb kořisti
@@ -155,14 +162,49 @@ const CONFIG = {
     maxChase: 160,           // nad tuto vzdálenost cíl vzdá (px)
   },
 
+  // --- Souboj (ukusování, melee) ---
+  // Dotyk NENÍ smrt. Útočník i obránce si navzájem ukusují ENERGII (= život).
+  // Z ukousnutého se vstřebá jen část (biteEfficiency), zbytek je režie a MIZÍ ze
+  // systému → energie ubývá → pat nevydrží → souboj vždy dospěje k vítězi. Vítěz
+  // je vyčerpaný (boj žere energii i staminu) a může pak umřít hlady.
+  combat: {
+    biteRange: 14,           // na jakou vzdálenost se ukusuje (souboj na dotek/překryv)
+    biteBase: 0.011,         // základní ukousnutí za snímek (×strength ×stamina)
+    biteEfficiency: 0.85,    // kolik z ukousnutého se vstřebá (zbytek = režie, mizí) — vyšší = sežrání víc nakrmí
+    exertionEnergy: 0.0006,  // přídavný výdej energie při souboji (boj vysiluje)
+    exertionStamina: 0.018,  // výdej staminy při souboji (→ zadýchání → slabší kousnutí)
+    engagedSeparation: 0.2,  // jak moc se ztlumí měkká separace od bojujícího spojence (≈ nahrň se k frontě)
+    maxAttackersPerTarget: 5,// kolik nepřátel smí SOUČASNĚ útočit na jeden cíl (1 = férový 1v1)
+    slotRange: 90,           // jen útočník blíž než tohle „obsadí slot" cíle — kulhající
+                             //   stragglery (mrtvý lock daleko vzadu) sloty neblokují
+  },
+
+  // --- Tlačenice (protahování na těsno bere rychlost) ---
+  crowd: {
+    radius: 22,              // v jakém poloměru kolem sebe počítá namačkaná těla
+    full: 5,                 // při tolika sousedech je zpomalení maximální
+    minFactor: 0.55,         // nejnižší násobek rychlosti v plné tlačenici
+  },
+
+  // --- Squady (sdílená informační vrstva skupiny) ---
+  // Spojenci stejné frakce se přes blízkost slévají do squadu (řetězí se →
+  // „žížaly"). Squad sdílí AGREGÁTY: kolik nás je, jak jsme silní, a co
+  // KOLEKTIVNĚ vidíme z nepřátel. Rozhodování (útok/strach) pak čte sílu
+  // celé skupiny, ne jen vnímaných sousedů → nevyrovnané boje se commitnou.
+  squad: {
+    radius: 70,              // do jaké vzdálenosti se spojenec připojí k squadu (řetězení)
+    sightRange: 120,         // dosah, na který squad KOLEKTIVNĚ vidí nepřátele (bez kužele)
+    overwhelm: 2.2,          // poměr síly (náš/jejich), nad kterým se vypne opatrnost → commit
+    debugFill: 20,           // alfa průhledného podbarvení squadu v debug pohledu
+  },
+
   // --- Energie (dlouhodobá rezerva "síly") ---
   // Klesá v čase (metabolismus), sprint ji ubírá rychleji. Cruise rychlost
   // se od ní odvíjí → kdo dlouho nejedl, slábne a zpomaluje. Při 0 = smrt hladem.
   energy: {
     start: [0.6, 1.0],       // počáteční rezerva (náhodně v rozsahu)
-    metabolism: 0.00010,     // základní pokles za snímek (~2,8 min z plné při klidu)
+    metabolism: 0.00005,     // základní pokles za snímek (běžný život ubírá pomalu, ať se nehladoví zbytečně)
     sprintDrain: 0.0005,     // přídavný pokles při sprintu
-    eatGain: 0.6,            // kolik energie doplní jeden úlovek
     maxEnergy: 1.3,          // strop — lze se "přejíst" na rezervu nad 100 % (štědřejší dárce)
     minCruise: 0.45,         // cruise rychlost při energii=0 (násobek base; při energii=1 je to base)
   },
@@ -173,7 +215,7 @@ const CONFIG = {
   heal: {
     seekThreshold: 0.45,     // pod touto energií se entita cítí zraněná → silněji vyhledá hejno
     seekBoost: 2.0,          // násobek koheze ke spojencům, když je zraněná
-    comfortThreshold: 0.7,   // hranice komfortu: dárce dává jen z přebytku nad ní, příjemce se hojí jen do ní
+    comfortThreshold: 0.55,  // hranice komfortu: dárce dává jen z přebytku nad ní, příjemce se hojí jen do ní
     donorRate: 0.0012,       // podíl přebytku dárce odevzdaný za snímek (postupně v čase)
   },
 
@@ -195,18 +237,45 @@ const CONFIG = {
     protectorRatio: 0.5,     // podíl PROTECTOR (zbytek ATTACKER)
   },
   courageStart: [0.2, 0.85], // počáteční odvaha (náhodně v rozsahu), neměnná
+  // SÍLA — povahová konstanta, VIDITELNÁ (soupeř ji při rozhodování o útoku zváží).
+  // Moduluje tempo ukusování i deterrence. Později ji bude přebíjet klan; skrytý
+  // "skill" (mířit na slabiny, uhýbat) přijde v další fázi a vidět NEbude.
+  strengthStart: [0.7, 1.3],
 
   // --- Fear (strach — dynamický) ---
   fear: {
     riseRate: 0.05,          // jak rychle roste při hrozbě
     decay: 0.010,            // přirozený pokles za snímek
     safeDecayBonus: 0.02,    // rychlejší pokles v bezpečí (spojenci, žádná hrozba)
+    // SLOŽENÍ HROZIVOSTI cizího (× powerFactor): hrozba pramení hlavně z toho, že
+    //   po mně aktivně jde, ne z toho, že má taky hlad. (Dřív byl hladový člen
+    //   dominantní → ke konci scény měl hlad každý → všichni se báli všech.)
+    baseThreat: 0.15,        // pasivní: cizí prostě v dosahu
+    hungerThreat: 0.25,      // mírný přídavek za jeho hlad (utlumeno z původního ~1.0)
     predatorMenace: 0.45,    // o kolik je děsivější aktivně lovící predátor (bezprostřední, čísly neškálováno)
     targetedBonus: 0.6,      // přídavek strachu, když si mě cizí vybral za kořist ("jde po MNĚ")
     threatGate: 0.3,         // od jaké hrozivosti se cizí počítá jako reálná hrozba
     fleeHysteresis: 0.12,    // útěk se nevypne hned na prahu (proti blikání rozhodnutí)
     allyBravery: 0.05,       // o kolik dodá odvahy každý blízký spojenec
     allyBraveryMax: 0.35,    // strop bonusu odvahy od hejna
+    hungerBravery: 0.6,      // HLAD DĚLÁ ODVAHU (až šílenství): hladový riskuje a útočí
+                             //   místo aby se bál — konec scény = hladové běsnění, ne strnulost
+
+    // ROZHODNUTÍ útěk vs. POSTAVIT SE A BOJOVAT (když je entita pod tlakem):
+    fightCourage: 0.6,       // od jaké (hejnem posílené) odvahy se místo útěku otočí a bojuje
+    fightBiasRange: 0.15,    // per-entitní náhodný posun prahu boj/útěk (individualita, ne strojové)
+    trappedFrames: 30,       // kolik snímků marného útěku (nedaří se zvětšit odstup) → zoufalý boj
+    breakOffFear: 0.92,      // při tak vysokém strachu se i bojující pokusí vytrhnout a prchnout
+  },
+
+  // --- Setrvačnost rozhodnutí (anti-thrashing) ---
+  // Jakmile entita zaujme postoj (lov / boj / útěk / klid), DRŽÍ ho aspoň pár
+  // snímků a teprve pak ho přehodnotí — pokud ji dřív nepřeruší něco zásadního
+  // (cíl zemřel/zmizel, hrozba zmizela, panika, zahnání do kouta). Brání blikání
+  // rozhodnutí každý snímek kvůli šumu ve vstupech (kolísání síly squadu apod.).
+  decision: {
+    holdFrames: 20,          // minimální doba držení postoje (snímky ~0,33 s)
+    jitter: 14,              // náhodný přídavek (ať nepřehodnocují všichni naráz)
   },
 
   // --- Deterrence / emboldenment (síla v počtech, krok 7) ---
@@ -239,8 +308,26 @@ const CONFIG = {
 
   // Modifikace vah podle charakteru
   charMods: {
-    PROTECTOR: { cohesion: 1.4, protect: 1.0, huntThresholdAdd: 0.15, pursue: 0.85 },
-    ATTACKER:  { cohesion: 0.7, protect: 0.25, huntThresholdAdd: -0.15, pursue: 1.25 },
+    PROTECTOR: { cohesion: 1.4, protect: 1.0, huntThresholdAdd: 0.15, pursue: 0.85, rally: 0.6 },
+    ATTACKER:  { cohesion: 0.7, protect: 0.25, huntThresholdAdd: -0.15, pursue: 1.25, rally: 0.45 },
+  },
+
+  // --- Rally (přidat se ke skupinovému boji) — Vrstva B ---
+  // Člen squadu, který sám nepřítele nevidí (nebo nemá vlastní cíl), se přidá
+  // k boji = vyrazí k těžišti nepřítele, které squad KOLEKTIVNĚ vidí. Tím se
+  // zapojí i zadáci a vznikne obkličování (přicházejí z více směrů).
+  // Ochota (helpDesire) skládá: role (charMods.rally) + odvaha − strach
+  // + bonus když squad vede; unavený/zraněný se drží v 2. linii, dokud squad
+  // neprohrává (pak se do „last standu" zapojí i hájení).
+  rally: {
+    weight: 1.8,             // síla rally steeringu (k těžišti nepřítele)
+    threshold: 0.5,          // od jakého helpDesire se entita zapojí
+    maxRange: 280,           // dál než tohle od ohniska se nerozbíhá (nevidí smysl)
+    courageW: 0.35,          // odvaha zvyšuje ochotu
+    fearW: 0.45,             // strach snižuje ochotu
+    advW: 0.3,               // převaha squadu: silní se hrnou (adv>1 →+), slabí necharí do prohry (adv<1 →−)
+    tiredHold: 0.4,          // pod touto energií NEBO staminou se drží v 2. linii…
+    desperation: 0.9,        // …dokud poměr síly (náš/jejich) neklesne pod tohle (pak jde i hájený)
   },
 
   // --- Vizuál ---
@@ -342,11 +429,14 @@ function hsv2rgb(h, s, v) {
 //  Globální stav
 // -------------------------------------------------------------------------
 let entities = [];
+let squads = [];             // shluky spojenců se sdílenou informací (přepočítává se každý snímek)
 let grid;                    // SpatialGrid — přestavuje se každý snímek
 let arena;                   // {x0,y0,x1,y1} — smršťující se hrací prostor
 let paused = false;
 let debug = false;
 let showLegend = false;      // legenda vizuálních stavů + pravidel (klávesa H)
+let simSpeed = 1;            // rychlost simulace (− zpomalí, + zrychlí); 1 = normál
+let simAccumulator = 0;      // akumulátor pro běh < 1× (slow-motion běží 1 krok za 1/simSpeed snímků)
 
 // životní cyklus scény: INTRO → ACTION → OUTRO → (nová scéna) → INTRO ...
 let sceneState = 'INTRO';
@@ -454,8 +544,7 @@ class Entity {
     this.alive = true;
     this.hunger = random(CONFIG.hunt.hungerStart[0], CONFIG.hunt.hungerStart[1]);
     this.role = 'PREY';            // dynamická, přepočítává se každý snímek
-    this.satiationTimer = 0;       // > 0 => nasycená (dočasně neloví)
-    this.huntTarget = null;        // aktuální cíl lovu (pro chování + debug)
+    this.huntTarget = null;        // aktuální cíl lovu (ofenziva; pro chování + debug)
 
     // --- energie a stamina ---
     this.energy = random(CONFIG.energy.start[0], CONFIG.energy.start[1]);  // rezerva síly
@@ -471,16 +560,30 @@ class Entity {
     // --- povaha a strach (krok 6) ---
     this.character = random() < CONFIG.character.protectorRatio ? 'PROTECTOR' : 'ATTACKER';
     this.courage = random(CONFIG.courageStart[0], CONFIG.courageStart[1]); // neměnná
+    this.strength = random(CONFIG.strengthStart[0], CONFIG.strengthStart[1]); // síla (viditelná, neměnná)
     this.fear = 0;                 // dynamický 0..1
     this.fleeing = false;          // utíká právě teď?
+    this.wantFight = false;        // postoj „postavit se a bojovat" (drží se přes setrvačnost)
+    this.rallying = false;         // postoj „jdu pomoct squadu do boje" (k těžišti nepřítele)
+    this.decisionTimer = 0;        // setrvačnost postoje: > 0 = drž rozhodnutí, nepřehodnocuj
+    this.fighting = false;         // právě kouše/je kousán (pro vizuál + exertion)
     this.localAllies = 0;          // počet vnímaných spojenců (síla v počtech, čtou i cizí)
     this.deterred = false;         // chtěl by lovit, ale odradila ho převaha kořisti
     this.nearestThreat = null;     // nejbližší hrozba (čtou ji i protectoři spojenců)
+    this.squad = null;             // sdílená skupina (přepočítává se každý snímek v buildSquads)
+    this.incomingAttackers = 0;    // kolik nepřátel mě má za huntTarget (přepočítává se před update)
+    this.trappedFrames = 0;        // marný útěk (nedaří se zvětšit odstup) → spustí zoufalý boj
+    this.lastThreatDist = Infinity;// odstup od hrozby v minulém snímku (detekce pasti)
+    this.crowding = 0;             // počet namačkaných těl kolem (zpomaluje průchod davem)
+    // osobní prostor + individuální sklon boj/útěk (mírný rozptyl, ať nejsou klony)
+    this.spacing = random(CONFIG.boids.personalSpace[0], CONFIG.boids.personalSpace[1]);
+    this.fightBias = random(-CONFIG.fear.fightBiasRange, CONFIG.fear.fightBiasRange);
     this.jukeTimer = floor(random(CONFIG.flee.jukeIntervalFrames[1])); // klička
     this.jukeDir = 1;              // strana zalomení (+1 / -1)
   }
 
-  get satiated() { return this.satiationTimer > 0; }
+  // sytost = plné břicho (ne časovač): nad satiationFull entita neshání nové cíle
+  get satiated() { return this.energy >= CONFIG.hunt.satiationFull; }
 
   // ---- aplikace síly (akumuluje se do acceleration) ----
   applyForce(force) {
@@ -550,13 +653,18 @@ class Entity {
   separation(neighbors) {
     const steer = createVector(0, 0);
     let count = 0;
-    const range = CONFIG.boids.separationRange;
+    // OSOBNÍ PROSTOR: každá entita drží trochu jiný odstup (this.spacing)
+    const range = CONFIG.boids.separationRange * this.spacing;
     const r2 = range * range;
+    const engW = CONFIG.combat.engagedSeparation;
     for (const o of neighbors) {
       const diff = p5.Vector.sub(this.position, o.position);
       const d2 = diff.magSq();
       if (d2 > 0 && d2 < r2) {
-        diff.setMag(1 / sqrt(d2));   // 1/d váhování
+        // u bojujícího spojence (nebo když sám bojuju) odpor ztlumíme → hejno se
+        // smí nahrnout k frontě a zapojit do kotle (ne se držet uctivě opodál)
+        const w = (this.fighting || o.fighting) ? engW : 1;
+        diff.setMag(w / sqrt(d2));   // 1/d váhování (× ztlumení při souboji)
         steer.add(diff);
         count++;
       }
@@ -602,9 +710,15 @@ class Entity {
   //  Potřebná převaha klesá s hladem (zoufalý riskuje) a u ATTACKERa.
   willingToAttack(f) {
     const D = CONFIG.deter;
-    const support = 1 + this.localAllies;
-    const protection = 1 + f.localAllies;
-    const ratio = support / protection;
+    // SQUAD vs viditelný NEPŘÍTEL: za mnou stojí síla celé skupiny, proti mně
+    // síla těch nepřátel, které skupina kolektivně vidí (mlha války → osamělá
+    // skupina může přečíslenou osmičku podcenit a nechat se překvapit).
+    const sq = this.squad;
+    const myPower = sq ? sq.power : this.strength;
+    // aspoň respektuj sílu samotného cíle (osamělý silák není snadná kořist)
+    const foePower = max(sq ? sq.enemyPower : 0, f.strength * constrain(f.energy, 0.15, 1));
+    const ratio = myPower / max(foePower, 0.0001);
+    if (ratio >= CONFIG.squad.overwhelm) return true;   // drtivá převaha → commit (opatrnost stranou)
     let need = D.baseRatio - this.hunger * D.hungerBravado;
     if (this.character === 'ATTACKER') need -= D.attackerBravado;
     need = max(D.minNeed, need);
@@ -614,33 +728,66 @@ class Entity {
   // ---- vyber kořist: nejbližší cizí, na kterou si troufnu zaútočit ----
   //  (izolovanou kořist nechá projít deterrence, kořist v sevřeném hejnu odradí)
   pickPrey(foes) {
+    const cap = CONFIG.combat.maxAttackersPerTarget;
     let best = null, bestD2 = Infinity;
     for (const f of foes) {
       if (!f.alive) continue;
-      if (!this.willingToAttack(f)) continue;   // odrazen převahou kořisti
+      if (f.incomingAttackers >= cap) continue;  // už ho obléhá dost útočníků → nech být (čekej na slot)
+      if (!this.willingToAttack(f)) continue;     // odrazen převahou/silou kořisti
       const d2 = p5.Vector.sub(f.position, this.position).magSq();
       if (d2 < bestD2) { bestD2 = d2; best = f; }
     }
     return best;
   }
 
-  // ---- pokus o sežrání kořisti (když je v dosahu killRange) ----
-  tryEat(prey) {
-    if (!prey.alive) return;
-    const d2 = p5.Vector.sub(prey.position, this.position).magSq();
-    if (d2 <= CONFIG.hunt.killRange * CONFIG.hunt.killRange) {
-      prey.alive = false;                       // kořist umírá (odstraní se po snímku)
-      prey.deathCause = 'eaten';                // příčina smrti (pro statistiku/komentář)
-      this.hunger = CONFIG.hunt.satiationHunger; // nasycení
-      this.energy = min(CONFIG.energy.maxEnergy, this.energy + CONFIG.energy.eatGain); // doplnění rezervy (lze přejíst)
-      this.satiationTimer = CONFIG.hunt.satiationFrames;
-      this.huntTarget = null;
+  // ---- Souboj: ukusování (oboustranné, kontaktní) ----
+  //  Každý snímek entita zasadí JEDNO kousnutí: primárně svému lovenému cíli
+  //  (ofenziva), jinak se brání a kousne nejbližšího nepřítele, který jde po ní.
+  //  Protože útočník drží oběť jako huntTarget, oběť ho přes větev "obrana" kousne
+  //  ZPĚT i když zrovna utíká. Z ukousnutého se vstřebá jen biteEfficiency, zbytek
+  //  je režie a mizí → energie ze systému ubývá → duel vždy spěje k vítězi.
+  doBite(foes) {
+    this.fighting = false;
+    const C = CONFIG.combat;
+    const r2 = C.biteRange * C.biteRange;
+
+    // 1) ofenziva: koušu vlastní cíl, je-li na dosah
+    let victim = null;
+    if (this.huntTarget && this.huntTarget.alive &&
+        p5.Vector.sub(this.huntTarget.position, this.position).magSq() <= r2) {
+      victim = this.huntTarget;
+    }
+    // 2) obrana: jinak kousnu nejbližšího nepřítele, který si MĚ vybral za cíl
+    if (!victim) {
+      let bd2 = r2;
+      for (const f of foes) {
+        if (!f.alive || f.huntTarget !== this) continue;
+        const d2 = p5.Vector.sub(f.position, this.position).magSq();
+        if (d2 <= bd2) { bd2 = d2; victim = f; }
+      }
+    }
+    if (!victim) return;
+
+    this.fighting = true;
+    // tempo ukusování = síla × stamina (zadýchaný kouše slaběji → může prohrát duel)
+    const rate = C.biteBase * this.strength * lerp(0.4, 1, this.stamina);
+    const taken = min(rate, victim.energy);
+    victim.energy -= taken;
+    const ingested = taken * C.biteEfficiency;                  // nutriční hodnota (zbytek = režie, mizí)
+    const room = CONFIG.energy.maxEnergy - this.energy;
+    this.energy += min(ingested, max(0, room));                 // co se vejde do břicha (přebytek mizí)
+    this.hunger = max(0, this.hunger - ingested * CONFIG.hunt.feedFactor); // jídlo TIŠÍ HLAD
+
+    if (victim.energy <= 0) {
+      victim.energy = 0;
+      victim.alive = false;
+      victim.deathCause = 'eaten';
+      if (this.huntTarget === victim) this.huntTarget = null;
       factionStats[this.faction].kills++;
-      // dramatický feed (sampling, ať se to nezahltí)
       if (random() < 0.4) {
         const hunter = lore.factions[this.faction].name;
-        const victim = lore.factions[prey.faction].name;
-        pushEvent(`${hunter} dostihl(a) ${victim}`, lore.factions[this.faction].color);
+        const prey = lore.factions[victim.faction].name;
+        pushEvent(`${hunter} dorazil(a) ${prey}`, lore.factions[this.faction].color);
       }
     }
   }
@@ -653,6 +800,7 @@ class Entity {
     const HE = CONFIG.heal;
     if (this.energy >= HE.comfortThreshold) return;   // nepotřebuje pomoc
     if (this.fleeing) return;                          // při útěku se neléčí
+    if (this.fighting) return;                         // v kotli žádná transfuze — léčí se až PO odpojení
 
     let received = 0;
     for (const a of allies) {
@@ -760,13 +908,27 @@ class Entity {
 
   // ---- jeden krok simulace ----
   update() {
+    // mrtvá entita (např. ukousnutá jiným útočníkem ve stejném snímku) už nic nedělá
+    if (!this.alive) return;
+
+    // Jeden krok simulace = lineární pipeline „vnímej → rozhodni se → jednej":
+    //   1) hlad v čase
+    //   2) vnímání → rozdělení na spojence / cizí
+    //   3) vyhodnocení hrozeb (threatSum, fleeVec, nejbližší hrozba)
+    //   4) strach (roste s hrozbou, jinak klesá)
+    //   5) rozhodnutí: klid / útěk / postavit se a bojovat
+    //   6) lov (ofenziva): výběr a držení kořisti (lock, deterrence, maxAttackers)
+    //   6b) souboj: oboustranné ukusování (doBite)
+    //   7) skupinový healing (jen mimo souboj)
+    //   8) energie / stamina / souboj / tlačenice → výsledná rychlost (zde i smrt)
+    //   9) steering: boids + flee / hunt / fight / protect
+    //  10) wander, okraje, integrace (setrvačnost) → posun pozice
     const H = CONFIG.hunt;
 
-    // 1) hlad a nasycení v čase (rychlost se počítá až po rozhodnutí, viz krok 7b)
-    if (this.satiationTimer > 0) this.satiationTimer--;
+    // 1) hlad v čase (rychlost se počítá až po rozhodnutí, viz krok 8)
     this.hunger = min(1, this.hunger + H.hungerRate);
 
-    // 3) koho entita vnímá (zorný kužel + proxy), rozděleno na spojence / cizí
+    // 2) koho entita vnímá (zorný kužel + proxy), rozděleno na spojence / cizí
     const perceived = this.perceive();
     const allies = [];
     const foes = [];
@@ -779,9 +941,14 @@ class Entity {
 
     const mods = CONFIG.charMods[this.character];
     const D = CONFIG.deter;
-    const myStrength = 1 + this.localAllies;
+    // síla MOJÍ skupiny vs síla viditelného nepřítele (sdílené přes squad).
+    const myPower = this.squad ? this.squad.power : this.strength;
+    const enemyPower = this.squad ? this.squad.enemyPower : 0;
+    // jak moc nás silově přečíslují → škáluje hrozivost (squad remíza = klid,
+    // přesila soupeře = strach, naše přesila = odvaha a commit)
+    const powerFactor = constrain(enemyPower / max(myPower, 0.0001), D.numMin, D.numMax);
 
-    // 4) hrozby mezi vnímanými cizími: hrozivost = potenciální (hlad, ŠKÁLOVANÁ
+    // 3) hrozby mezi vnímanými cizími: hrozivost = potenciální (hlad, ŠKÁLOVANÁ
     //    početní převahou) + bezprostřední (cizí právě loví / jde po MNĚ — čísly
     //    NEškálováno, aby vtržení predátora do hejna i tak vyděsilo okolí).
     const F = CONFIG.fear;
@@ -793,11 +960,9 @@ class Entity {
       const d = p5.Vector.dist(this.position, f.position);
       const prox = constrain(1 - d / CONFIG.perception.visionRange, 0, 1);
 
-      // poměr sil: jeho_ochrana / moje_síla  (>1 = soupeř silnější → děsivější)
-      const foeStrength = 1 + f.localAllies;
-      const numFactor = constrain(foeStrength / myStrength, D.numMin, D.numMax);
-
-      let menace = f.hunger * numFactor;                      // potenciální (škálovaná čísly)
+      // hrozivost: pasivní (cizí v dosahu + mírně jeho hlad) × silová převaha;
+      //   to hlavní (predator/jde-po-mně) se přičítá níž a hladem se NEškáluje
+      let menace = (F.baseThreat + f.hunger * F.hungerThreat) * powerFactor;
       if (f.role === 'PREDATOR') menace += F.predatorMenace;  // bezprostřední: aktivně loví
       if (f.huntTarget === this) menace += F.targetedBonus;   // bezprostřední: jde po mně
 
@@ -814,7 +979,7 @@ class Entity {
     }
     threatSum = min(threatSum, 1.5);
 
-    // 5) strach: roste s hrozbou, jinak klesá (v bezpečí rychleji)
+    // 4) strach: roste s hrozbou, jinak klesá (v bezpečí rychleji)
     if (threatSum > 0) {
       this.fear = min(1, this.fear + threatSum * F.riseRate);
     } else {
@@ -822,44 +987,108 @@ class Entity {
       this.fear = max(0, this.fear - dec);
     }
 
-    // odvaha posílená blízkým hejnem (sevřené hejno = větší kuráž)
+    // odvaha = povaha + CELÝ squad (i zadák ví, že je nás hodně) + HLAD (desperation:
+    //   hladový riskuje až běsní). Díky hladu se konec scény mění ve frenzy, ne ve strnulost.
+    const sqSize = this.squad ? this.squad.size : 1;
     const bravery = this.courage +
-      min(allies.length * F.allyBravery, F.allyBraveryMax);
+      min((sqSize - 1) * F.allyBravery, F.allyBraveryMax) +
+      this.hunger * F.hungerBravery;
 
-    // 6) rozhodnutí útěk vs. zůstat = strach vs. odvaha (s hysterezí proti blikání:
-    //    jakmile už utíká, vypne se až když strach klesne pod práh o margin)
-    const fleeThreshold = this.fleeing ? bravery - F.fleeHysteresis : bravery;
-    this.fleeing = !!this.nearestThreat && (this.fear > fleeThreshold);
-
-    // 7) role/lov: jen když neutíká, není nasycená a hlad překročí
-    //    charakterem upravený práh (ATTACKER loví ochotněji).
-    //    KOMMITMENT: jakmile si vybere oběť, drží se jí (lock) — i mimo dohled —
-    //    dokud nezemře / není moc daleko / není odrazena. Žádné cukání mezi cíli.
+    // 5) + 6) ROZHODNUTÍ se SETRVAČNOSTÍ. Postoj (klid / útěk / boj / lov) se
+    //    NEpřepočítává od nuly každý snímek — drží se `decisionTimer` snímků a
+    //    přehodnotí se až po jeho vypršení, NEBO když nastane tvrdé přerušení
+    //    (cíl zmizel, hrozba zmizela, panika, zahnání do kouta). Tím zmizí blikání
+    //    rozhodnutí kvůli šumu ve vstupech (kolísání síly squadu apod.).
     const effHuntThreshold = H.huntThreshold + mods.huntThresholdAdd;
-    const wantsToHunt = !this.fleeing && !this.satiated && this.hunger >= effHuntThreshold;
 
+    // 5a) měření pasti (běží KAŽDÝ snímek, nezávisle na setrvačnosti)
+    const threatDist = this.nearestThreat
+      ? p5.Vector.dist(this.position, this.nearestThreat.position) : Infinity;
+    if (this.fleeing && this.nearestThreat && threatDist < CONFIG.perception.visionRange) {
+      if (threatDist <= this.lastThreatDist + 0.5) this.trappedFrames++;   // odstup neroste → past
+      else this.trappedFrames = max(0, this.trappedFrames - 2);            // unikám → reset
+    } else {
+      this.trappedFrames = 0;
+    }
+    this.lastThreatDist = threatDist;
+    const trapped = this.trappedFrames >= F.trappedFrames;
+
+    // 5b) údržba cíle lovu KAŽDÝ snímek: obnova locku + TVRDÉ puštění (smrt/daleko/lock)
+    let huntInvalid = false;
     if (this.huntTarget) {
       const t = this.huntTarget;
-      if (foes.includes(t)) this.huntLock = H.lockFrames;   // vidím ho → obnov závazek
-      else this.huntLock--;                                 // mimo dohled → odpočet
+      if (foes.includes(t)) this.huntLock = H.lockFrames; else this.huntLock--;
       const tooFar = p5.Vector.sub(t.position, this.position).magSq() > H.maxChase * H.maxChase;
-      if (!t.alive || tooFar || this.huntLock <= 0 || !wantsToHunt || !this.willingToAttack(t)) {
-        this.huntTarget = null;
+      if (!t.alive || tooFar || this.huntLock <= 0) { this.huntTarget = null; huntInvalid = true; }
+    }
+
+    // 5c) přehodnotit postoj? (vypršela setrvačnost NEBO tvrdé přerušení)
+    const reDecide =
+      this.decisionTimer <= 0 ||
+      huntInvalid ||                                                 // ztratil cíl
+      (!this.nearestThreat && (this.fleeing || this.wantFight)) ||   // hrozba zmizela
+      (this.fear >= F.breakOffFear && !this.fleeing) ||              // panika → smí přepnout na útěk
+      (trapped && !this.wantFight);                                  // past → smí přepnout na boj
+
+    if (reDecide) {
+      // útěk vs. postavit se a bojovat (strach vs. odvaha + sklon / zoufalství)
+      const fleeThreshold = this.fleeing ? bravery - F.fleeHysteresis : bravery;
+      const underPressure = !!this.nearestThreat && this.fear > fleeThreshold;
+      let wantFight = underPressure &&
+        ((bravery + this.fightBias) >= F.fightCourage || trapped);
+      if (wantFight && this.fear >= F.breakOffFear && !trapped) wantFight = false; // prohrávám → prchni
+      this.wantFight = wantFight;
+      this.fleeing = underPressure && !wantFight;
+
+      // LOV (ofenziva): deterrence/rescue se vyhodnocuje PRÁVĚ TADY (ne každý snímek)
+      //   — pustí cíl, když kořisti přiběhla pomoc. Nasycenost blokuje jen NOVÉ cíle;
+      //   rozkousaný cíl entita dorazí i sytá (přebytek propadne jako režie).
+      const wantsToHunt = !this.fleeing && !this.satiated && this.hunger >= effHuntThreshold;
+      if (this.fleeing) {
+        this.huntTarget = null;                                      // útěk ruší ofenzivu
+      } else if (this.huntTarget && !this.willingToAttack(this.huntTarget)) {
+        this.huntTarget = null;                                      // odrazen (přepočet převahy/síly)
       }
+      if (wantsToHunt && !this.huntTarget) {
+        this.huntTarget = this.pickPrey(foes);
+        if (this.huntTarget) {
+          this.huntLock = H.lockFrames;
+          const td2 = p5.Vector.sub(this.huntTarget.position, this.position).magSq();
+          if (td2 <= CONFIG.combat.slotRange * CONFIG.combat.slotRange) this.huntTarget.incomingAttackers++;
+        }
+      }
+      this.deterred = wantsToHunt && !this.huntTarget && foes.length > 0;
+
+      // RALLY (Vrstva B): nemám vlastní cíl ani osobní hrozbu, ale squad KOLEKTIVNĚ
+      //   vidí nepřítele → přidej se do boje (k jeho těžišti) podle ochoty helpDesire.
+      this.rallying = false;
+      const sq = this.squad;
+      if (!this.fleeing && !this.wantFight && !this.huntTarget && sq && sq.hasEnemy) {
+        const RA = CONFIG.rally;
+        const adv = sq.power / max(sq.enemyPower, 0.0001);
+        let desire = mods.rally + this.courage * RA.courageW - this.fear * RA.fearW
+                   + (adv - 1) * RA.advW;                         // silní se hrnou, slabí necharí do prohry
+        const tired = this.energy < RA.tiredHold || this.stamina < RA.tiredHold;
+        if (tired && adv >= RA.desperation) desire -= 0.5;        // hájený: drž se v 2. linii…
+        const d2 = (this.position.x - sq.enemyCx) ** 2 + (this.position.y - sq.enemyCy) ** 2;
+        this.rallying = d2 <= RA.maxRange * RA.maxRange && desire >= RA.threshold;  // …dokud neprohráváme
+      }
+
+      this.decisionTimer = CONFIG.decision.holdFrames + floor(random(CONFIG.decision.jitter));
+    } else {
+      this.decisionTimer--;                                          // drž postoj dál
     }
-    if (wantsToHunt && !this.huntTarget) {                   // nový cíl jen když žádný nedrží
-      this.huntTarget = this.pickPrey(foes);
-      if (this.huntTarget) this.huntLock = H.lockFrames;
-    }
-    // "odrazen": chtěl lovit a kořist v dohledu byla, ale převaha ho odradila
-    this.deterred = wantsToHunt && !this.huntTarget && foes.length > 0;
     this.role = this.huntTarget ? 'PREDATOR' : 'PREY';
 
-    // 7a) skupinový healing: zraněný přijme energii od zdravých spojenců
-    //     (před výpočtem smrti hladem — hejno tě může vytáhnout z nuly)
+    // 6b) SOUBOJ: oboustranné ukusování. Útočník kouše svůj cíl; oběť (i bránící se,
+    //     i prchající) kouše zpět toho, kdo si ji vybral. Nastaví this.fighting.
+    this.doBite(foes);
+
+    // 7) skupinový healing: zraněný přijme energii od zdravých spojenců (mimo souboj;
+    //     před výpočtem smrti — hejno tě může vytáhnout z nuly)
     this.receiveHealing(allies);
 
-    // 7b) energie, stamina a výsledná rychlost
+    // 8) energie, stamina a výsledná rychlost
     //   - sprint chce predátor až nablízko ke kořisti (engage), kořist až když
     //     je hrozba blízko (panic) — jinak se "šetří" cruisem.
     //   - sprint vybíjí staminu i energii; vyčerpaná stamina => zadýchání (winded).
@@ -884,9 +1113,16 @@ class Entity {
       this.stamina = min(1, this.stamina + ST.regen);
       if (this.winded && this.stamina >= ST.recoverThreshold) this.winded = false;
     }
+    // souboj navíc vysiluje staminu (zadýchaný kouše slaběji → může duel prohrát)
+    if (this.fighting) {
+      this.stamina = max(0, this.stamina - CONFIG.combat.exertionStamina);
+      if (this.stamina <= 0) this.winded = true;
+    }
 
-    // energie: metabolismus (+ sprint navíc); při 0 entita umírá hladem
-    this.energy -= EN.metabolism + (sprinting ? EN.sprintDrain : 0);
+    // energie: metabolismus (+ sprint navíc + souboj navíc); při 0 entita umírá
+    // (proto i vítěz vyčerpaného souboje může vzápětí padnout hlady)
+    this.energy -= EN.metabolism + (sprinting ? EN.sprintDrain : 0)
+                                 + (this.fighting ? CONFIG.combat.exertionEnergy : 0);
     if (this.energy <= 0) { this.energy = 0; this.alive = false; this.deathCause = 'starved'; return; }
 
     // cruise rychlost dle energie (přebytek nad 1.0 je jen rezerva, ne rychlost)
@@ -896,7 +1132,12 @@ class Entity {
     else if (this.winded) this.maxSpeed = cruise * ST.windedFactor;
     else                  this.maxSpeed = cruise;
 
-    // 8) klasické boids síly v rámci frakce
+    // TLAČENICE: protahování mezi namačkanými těly bere rychlost (davem se jde pomalu)
+    const CR = CONFIG.crowd;
+    this.crowding = this.findNeighbors(CR.radius).length;
+    this.maxSpeed *= lerp(1, CR.minFactor, min(1, this.crowding / CR.full));
+
+    // 9) klasické boids síly v rámci frakce
     //    (kohéze: PROTECTOR drží hejno víc, ATTACKER míň; lov ji ztlumí;
     //     zraněný k hejnu silněji lne — hledá pomoc/healing)
     let cohW = CONFIG.boids.cohesionWeight * mods.cohesion;
@@ -922,9 +1163,18 @@ class Entity {
         this.applyForce(this.juke());
       }
     } else if (this.huntTarget) {
-      // --- LOV --- miř na kořist (predikce) a případně sežer
+      // --- LOV --- miř na kořist (predikce); ukousnutí řeší doBite (krok 6b)
       this.applyForce(this.pursue(this.huntTarget).mult(H.pursueWeight * mods.pursue));
-      this.tryEat(this.huntTarget);
+    } else if (this.wantFight && this.nearestThreat && this.nearestThreat.alive) {
+      // --- POSTAVIT SE A BOJOVAT --- otoč se čelem k hrozbě a zaklesni se s ní
+      //     (kousat se bude samo přes doBite, až bude na dosah; obrana = kousnutí zpět)
+      this.applyForce(this.seekPoint(this.nearestThreat.position).mult(H.pursueWeight * mods.pursue));
+    } else if (this.rallying && this.squad && this.squad.hasEnemy) {
+      // --- RALLY --- přidej se ke skupinovému boji: vyraz k těžišti nepřítele,
+      //     které squad kolektivně vidí (i když ho sám zatím nevidím). Příchody
+      //     z více směrů → obkličování, do boje se zapojí i zadáci.
+      this.applyForce(this.seekPoint(createVector(this.squad.enemyCx, this.squad.enemyCy))
+        .mult(CONFIG.rally.weight));
     } else if (this.character === 'PROTECTOR') {
       // --- OCHRANA --- vmezeř se mezi ohroženého spojence a hrozbu
       this.applyForce(
@@ -932,12 +1182,12 @@ class Entity {
       );
     }
 
-    // 9) wander se ztlumí, když má entita kolem sebe spojence (drží hejno),
-    //    a při útěku/lovu ho potlačíme úplně (entita má jasný cíl)
+    // 10) wander se ztlumí, když má entita kolem sebe spojence (drží hejno),
+    //    a při útěku/lovu/boji ho potlačíme úplně (entita má jasný cíl)
     let wanderWeight = allies.length > 0
       ? CONFIG.wanderFlockWeight
       : CONFIG.wanderLoneWeight;
-    if (this.fleeing || this.huntTarget) wanderWeight = 0;
+    if (this.fleeing || this.huntTarget || this.wantFight || this.rallying) wanderWeight = 0;
     this.applyForce(this.wander().mult(wanderWeight));
 
     this.applyForce(this.edges().mult(CONFIG.edge.weight));
@@ -1001,8 +1251,11 @@ class Entity {
     translate(this.position.x, this.position.y);
     rotate(angle);
 
-    // predátor s cílem dostane jemný světlý obrys (je vidět, že loví)
-    if (this.role === 'PREDATOR') {
+    // souboj = červený obrys (kouše/je kousán); jinak predátor s cílem = světlý obrys
+    if (this.fighting) {
+      stroke(255, 90, 60, 230);
+      strokeWeight(1.8);
+    } else if (this.role === 'PREDATOR') {
       stroke(255, 255, 255, 200);
       strokeWeight(1.5);
     } else {
@@ -1071,6 +1324,12 @@ class Entity {
       strokeWeight(1.5);
       line(this.position.x, this.position.y,
            this.nearestThreat.position.x, this.nearestThreat.position.y);
+    }
+    // čára rally (→ k těžišti nepřítele squadu), světle modrá
+    if (this.rallying && this.squad && this.squad.hasEnemy) {
+      stroke(120, 200, 255, 180);
+      strokeWeight(1.2);
+      line(this.position.x, this.position.y, this.squad.enemyCx, this.squad.enemyCy);
     }
     pop();
 
@@ -1417,6 +1676,7 @@ function startNewScene() {
   generateLore();
   makePlanet();
   spawnScene();
+  squads = [];               // ať debug nekreslí obálky z minulé scény během intra
   sceneState = 'INTRO';
   fadeAlpha = 1;
   introTimer = 0;
@@ -1554,16 +1814,188 @@ function updateArena() {
 //  Každá entita posune SEBE o díl překryvu; protějšek se posune při svém
 //  zpracování → pár se symetricky rozhrne. Pár relaxačních průchodů stabilizuje
 //  i hustá místa (entity se můžou dotýkat/drcnout, ale ne prolnout).
+// -------------------------------------------------------------------------
+//  Squady — sdílená informační vrstva skupiny (Vrstva A)
+// -------------------------------------------------------------------------
+// Spojenci stejné frakce se přes blízkost (CONFIG.squad.radius) slévají do
+// squadu (union-find → řetězí se do „žížal"; rozpad na podskupiny vzniká sám).
+// Squad sdílí agregáty: size, power a KOLEKTIVNÍ odhad nepřítele (jen z toho,
+// co někdo z členů vidí → mlha války). Rozhodování pak čte sílu celé skupiny.
+function buildSquads() {
+  const n = entities.length;
+  squads = [];
+  if (n === 0) return;
+
+  // --- union-find nad indexy entit ---
+  const parent = new Array(n);
+  for (let i = 0; i < n; i++) { parent[i] = i; entities[i]._ui = i; entities[i]._foes = null; }
+  const find = (a) => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+
+  const SQ = CONFIG.squad;
+  const qr = max(SQ.radius, SQ.sightRange);
+  const radius2 = SQ.radius * SQ.radius;
+  const sight2 = SQ.sightRange * SQ.sightRange;
+
+  // jeden dotaz na entitu: spojenec do radius → union; cizí do sightRange → stash
+  for (let i = 0; i < n; i++) {
+    const e = entities[i];
+    const near = grid.query(e.position.x, e.position.y, qr);
+    for (const o of near) {
+      if (o === e) continue;
+      const d2 = (e.position.x - o.position.x) ** 2 + (e.position.y - o.position.y) ** 2;
+      if (o.faction === e.faction) {
+        if (d2 <= radius2) union(e._ui, o._ui);
+      } else if (d2 <= sight2) {
+        (e._foes || (e._foes = [])).push(o);   // viditelný nepřítel (do sdíleného odhadu)
+      }
+    }
+  }
+
+  // --- seskup členy do squad objektů + nasčítej sílu a těžiště ---
+  const byRoot = new Map();
+  for (let i = 0; i < n; i++) {
+    const e = entities[i];
+    const r = find(i);
+    let sq = byRoot.get(r);
+    if (!sq) {
+      sq = { members: [], size: 0, power: 0, cx: 0, cy: 0, faction: e.faction,
+             enemies: new Set(), enemyPower: 0, enemyCount: 0,
+             hasEnemy: false, enemyCx: 0, enemyCy: 0 };
+      byRoot.set(r, sq);
+      squads.push(sq);
+    }
+    sq.members.push(e);
+    sq.size++;
+    sq.power += e.strength * constrain(e.energy, 0.15, 1);
+    sq.cx += e.position.x; sq.cy += e.position.y;
+    e.squad = sq;
+    if (e._foes) for (const f of e._foes) sq.enemies.add(f);
+  }
+
+  // --- dokonči: těžiště + sdílený odhad nepřítele (součet viditelných hlav) ---
+  for (const sq of squads) {
+    sq.cx /= sq.size; sq.cy /= sq.size;
+    let ep = 0, ex = 0, ey = 0, ec = 0;
+    for (const f of sq.enemies) {
+      if (!f.alive) continue;
+      ep += f.strength * constrain(f.energy, 0.15, 1);
+      ex += f.position.x; ey += f.position.y; ec++;
+    }
+    sq.enemyPower = ep; sq.enemyCount = ec;
+    if (ec > 0) { sq.hasEnemy = true; sq.enemyCx = ex / ec; sq.enemyCy = ey / ec; }
+  }
+}
+
+// Convex hull (Andrew monotone chain) z bodů [{x,y}] → pole vrcholů obálky.
+function convexHull(pts) {
+  if (pts.length < 3) return pts.slice();
+  const p = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower = [];
+  for (const pt of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], pt) <= 0) lower.pop();
+    lower.push(pt);
+  }
+  const upper = [];
+  for (let i = p.length - 1; i >= 0; i--) {
+    const pt = p[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], pt) <= 0) upper.pop();
+    upper.push(pt);
+  }
+  lower.pop(); upper.pop();
+  return lower.concat(upper);
+}
+
+// DEBUG: ÚZEMÍ squadu = sjednocení disků kolem členů (dosah propojení) podbarvené
+//  barvou frakce, plus obrysová hranice (convex hull). Vykresluje plochu, ne čáru.
+function drawSquads() {
+  const SQ = CONFIG.squad;
+  const diam = SQ.radius * 0.6 * 2;   // disk kolem každého člena; sousedé se slijí v blob
+  push();
+  // 1) plocha území — průhledné disky (překryvy se přirozeně slévají do blobu)
+  noStroke();
+  for (const sq of squads) {
+    const col = lore.factions[sq.faction].color;
+    fill(col[0], col[1], col[2], SQ.debugFill);
+    for (const m of sq.members) if (m.alive) circle(m.position.x, m.position.y, diam);
+  }
+  // 2) hranice — convex hull kolem členů
+  noFill();
+  strokeWeight(1.2);
+  for (const sq of squads) {
+    const pts = [];
+    for (const m of sq.members) if (m.alive) pts.push({ x: m.position.x, y: m.position.y });
+    if (pts.length < 3) continue;
+    const col = lore.factions[sq.faction].color;
+    stroke(col[0], col[1], col[2], 130);
+    const hull = convexHull(pts);
+    beginShape();
+    for (const v of hull) vertex(v.x, v.y);
+    endShape(CLOSE);
+  }
+  pop();
+}
+
+// DEBUG: štítky squadů „počet·síla [vs odhad nepřítele]" — kreslí se NAKONEC
+//  (přes vše) a s tmavým obrysem, ať jsou čitelné na barevné ploše.
+function drawSquadLabels() {
+  push();
+  textAlign(CENTER, CENTER);
+  textSize(11);
+  strokeJoin(ROUND);
+  for (const sq of squads) {
+    if (!sq.members.some(m => m.alive)) continue;
+    const col = lore.factions[sq.faction].color;
+    const label = `${sq.size}·${nf(sq.power, 1, 1)}${sq.hasEnemy ? ' vs ' + nf(sq.enemyPower, 1, 1) : ''}`;
+    stroke(0, 0, 0, 210); strokeWeight(3);          // tmavý obrys pro čitelnost
+    fill(col[0], col[1], col[2]);
+    text(label, sq.cx, sq.cy);
+  }
+  pop();
+}
+
+// Spočítej, kolik útočníků míří na každou entitu (huntTarget) — řídí cap
+// CONFIG.combat.maxAttackersPerTarget. Volá se jednou před update smyčkou
+// (huntTarget přetrvává mezi snímky, takže jednosnímkové zpoždění nevadí).
+function countAttackers() {
+  const slot2 = CONFIG.combat.slotRange * CONFIG.combat.slotRange;
+  for (const e of entities) e.incomingAttackers = 0;
+  for (const e of entities) {
+    const t = e.huntTarget;
+    if (!t || !t.alive) continue;
+    // slot obsadí jen útočník, který je reálně blízko (zapojený/dobíhající),
+    // ne ten, co drží mrtvý lock a kulhá daleko vzadu (jinak by blokoval ostatní)
+    const d2 = (e.position.x - t.position.x) ** 2 + (e.position.y - t.position.y) ** 2;
+    if (d2 <= slot2) t.incomingAttackers++;
+  }
+}
+
 function resolveOverlaps() {
   const C = CONFIG.collision;
-  const minDist = C.bodyRadius * 2;
-  const minD2 = minDist * minDist;
+  const base = C.bodyRadius * 2;                 // normální podlaha (klidní spojenci)
+  // při SOUBOJI se podlaha měkčí (těla se smí přimáčknout / překrýt) — viz CONFIG.collision
+  const allyTight = base * C.allyTightFactor;    // spojenci u fronty (aspoň jeden bojuje)
+  const overlap   = base * C.combatOverlapFactor;// útočník ↔ jeho cíl (smí se úplně překrýt)
+  const squeeze   = base * C.enemySqueezeFactor; // nebojující cizí (protáhnout se na těsno)
 
   for (let iter = 0; iter < C.iterations; iter++) {
     for (const e of entities) {
-      const near = grid.query(e.position.x, e.position.y, minDist);
+      const near = grid.query(e.position.x, e.position.y, base);
       for (const o of near) {
         if (o === e) continue;
+
+        // jaká rozhrnovací podlaha platí pro TUTO dvojici?
+        let minDist;
+        if (o.faction === e.faction) {
+          minDist = (e.fighting || o.fighting) ? allyTight : base;  // spojenci u kotle na těsno
+        } else if (e.huntTarget === o || o.huntTarget === e) {
+          minDist = overlap;                                        // útočník ↔ cíl: smí se překrýt
+        } else {
+          minDist = squeeze;                                        // ostatní cizí: protáhnout se na těsno
+        }
+        const minD2 = minDist * minDist;
+
         let dx = e.position.x - o.position.x;
         let dy = e.position.y - o.position.y;
         const d2 = dx * dx + dy * dy;
@@ -1601,15 +2033,25 @@ function draw() {
   if (!paused) {
     // simulace běží jen v akci (v intru/outru entity stojí / se vyhodnocují)
     if (sceneState === 'ACTION') {
-      updateArena();                 // smrští prostor podle počtu přeživších
-      for (const e of entities) e.update();
-      // vyhodnoť mrtvé (statistika příčin + konec frakce) a odstraň je
-      if (entities.some(e => !e.alive)) processDeaths();
-      // tvrdé rozhrnutí překryvů (na čerstvých pozicích) — těla se nesmí prolnout
-      rebuildGrid();
-      resolveOverlaps();
-      // tvrdé udržení uvnitř (smrštěné) arény — nikdo nesmí překročit hranici ven
-      confineToArena();
+      updateArena();                 // smrští prostor podle počtu přeživších (1× za snímek)
+      // RYCHLOST simulace: simSpeed kroků za snímek. Slow-motion (simSpeed<1)
+      //   spustí krok jen jednou za 1/simSpeed snímků; zrychlení provede víc kroků.
+      simAccumulator += simSpeed;
+      let steps = 0;
+      while (simAccumulator >= 1 && steps < 8) {
+        rebuildGrid();               // čerstvé sousedství pro tento krok
+        buildSquads();               // sdílená informační vrstva skupin (síla, odhad nepřítele)
+        countAttackers();            // přepočti obléhající útočníky (cap maxAttackersPerTarget)
+        for (const e of entities) e.update();
+        if (entities.some(e => !e.alive)) processDeaths();   // statistika + odstranění mrtvých
+        rebuildGrid();
+        resolveOverlaps();           // těla se nesmí prolnout (mimo souboj)
+        confineToArena();            // nikdo nepřekročí hranici (smrštěné) arény
+        simAccumulator -= 1;
+        steps++;
+      }
+    } else {
+      simAccumulator = 0;            // mimo akci se rychlost neakumuluje
     }
     // životní cyklus scény (intro → akce → outro → nový příběh)
     updateSceneState();
@@ -1620,6 +2062,7 @@ function draw() {
 
   if (debug) {
     grid.render();
+    drawSquads();
     drawNeighborProbe();
   }
 
@@ -1635,7 +2078,7 @@ function draw() {
   drawLegendHint();           // tichý náznak "H — legenda"
   if (showLegend) drawLegend();
 
-  if (debug) drawHud();
+  if (debug) { drawSquadLabels(); drawHud(); }   // štítky squadů až úplně nakonec (čitelnost)
 }
 
 // Černý překryv pro plynulý přechod scén.
@@ -1655,7 +2098,7 @@ function drawIntro() {
 
   // sestav řádky: 2 hlavičkové + jeden na frakci
   const n = lore.factions.length;
-  const verb = n <= 4 ? 'utkají se' : 'utká se';
+  const verb = n <= 4 ? 'se utkají' : 'se utká';
   const noun = n <= 4 ? 'frakce' : 'frakcí';
   const lines = [];
   lines.push({ text: `Ve světě ${lore.world}`, size: 30, col: [230, 235, 245] });
@@ -1881,7 +2324,9 @@ function drawSampleEntity(x, y, opt) {
     circle(x, y, s * 3.4);
   }
   translate(x, y);
-  if (opt.outline) { stroke(255, 255, 255, 220); strokeWeight(1.5); } else noStroke();
+  if (opt.fight) { stroke(255, 90, 60, 230); strokeWeight(1.8); }
+  else if (opt.outline) { stroke(255, 255, 255, 220); strokeWeight(1.5); }
+  else noStroke();
   fill(r, g, b);
   beginShape();
   for (const p of SHAPES[shape]) vertex(p[0] * s, p[1] * s);
@@ -1901,6 +2346,8 @@ function drawLegend() {
       text: 'Tmavší = strach (prchá) nebo zadýchání (vyčerpaná stamina).' },
     { draw: (x, y) => drawSampleEntity(x, y, { size: 11, outline: true }),
       text: 'Bílý obrys = právě loví (vybrala si kořist a pronásleduje ji).' },
+    { draw: (x, y) => drawSampleEntity(x, y, { size: 11, fight: true }),
+      text: 'Červený obrys = souboj (ukusuje soupeři život a soupeř jí zpět).' },
     { draw: (x, y) => drawSampleEntity(x, y, { size: 10, ring: true }),
       text: 'Zelený prstenec = léčí se v hejnu (zdraví spojenci jí dávají energii).' },
     { draw: (x, y) => { drawSampleEntity(x - 8, y, { size: 11, shape: 0, col: [90, 200, 255] }); drawSampleEntity(x + 9, y, { size: 11, shape: 2, col: [255, 110, 185] }); },
@@ -1910,9 +2357,10 @@ function drawLegend() {
     'Stejná barva drží spolu (hejna), cizí barvy se navzájem loví.',
     'Hlad roste v čase a nutí lovit; čím hladovější, tím ochotnější riskovat.',
     'Energie pomalu ubývá; sprint ji i staminu vyčerpá → zadýchání a zpomalení.',
-    'Útěk vs. obrana = strach proti odvaze; blízké hejno dodává odvahu.',
-    'Přesila láká k útoku, sevřené hejno útočníka odrazí.',
-    'Zraněná entita se stáhne do hejna, kde ji zdraví léčí.',
+    'Útěk vs. boj = strach proti odvaze; v koutě i srab bojuje, kořist kouše i v útěku.',
+    'Souboj = oboustranné ukusování; silnější a méně zadýchaný vítězí, vítěz pak slábne.',
+    'Přesila láká k útoku, sevřené hejno (i silný jedinec) útočníka odrazí.',
+    'Zraněná entita se stáhne do hejna, kde ji po boji zdraví léčí.',
     'Když přežije jediná frakce, scéna končí a začne nová.',
   ];
 
@@ -1987,14 +2435,24 @@ function drawNeighborProbe() {
   fill(230);
   textSize(11);
   textAlign(LEFT, BOTTOM);
-  let state = probe.fleeing ? 'FLEE' : (probe.deterred ? 'DETER' : probe.role);
+  let state = probe.fighting ? 'FIGHT'
+            : (probe.fleeing ? 'FLEE'
+            : (probe.rallying ? 'RALLY'
+            : (probe.deterred ? 'DETER' : probe.role)));
   if (probe.sprinting) state += '+SPRINT';
   else if (probe.winded) state += '+WINDED';
   text(`${probe.character} ${state}  hlad:${nf(probe.hunger,1,2)} ` +
        `strach:${nf(probe.fear,1,2)} odvaha:${nf(probe.courage,1,2)} spoj:${probe.localAllies}`,
        probe.position.x + 10, probe.position.y - 20);
-  text(`energie:${nf(probe.energy,1,2)}  stamina:${nf(probe.stamina,1,2)}`,
+  const sq = probe.squad;
+  text(`energie:${nf(probe.energy,1,2)}  stamina:${nf(probe.stamina,1,2)} ` +
+       `síla:${nf(probe.strength,1,2)} útoč:${probe.incomingAttackers}`,
        probe.position.x + 10, probe.position.y - 8);
+  if (sq) {
+    text(`squad: ${sq.size} ks, síla ${nf(sq.power,1,1)}` +
+         (sq.hasEnemy ? ` vs nepřítel ${nf(sq.enemyPower,1,1)}` : ''),
+         probe.position.x + 10, probe.position.y + 4);
+  }
   pop();
 }
 
@@ -2013,8 +2471,9 @@ function drawHud() {
   fill(150, 160, 175);
   textSize(12);
   textAlign(LEFT, TOP);
+  const speedLabel = paused ? 'PAUZA' : (simSpeed === 1 ? '' : `${simSpeed}×`);
   text(`FPS: ${nf(frameRate(), 0, 0)}   entit: ${entities.length}   ` +
-       `predátoři: ${predators}   [${sceneState}]` + (paused ? ' PAUZA' : ''), 10, height - 40);
+       `predátoři: ${predators}   [${sceneState}]` + (speedLabel ? '  ' + speedLabel : ''), 10, height - 40);
 
   // počty frakcí obarvené (s názvem)
   let x = 10;
@@ -2036,6 +2495,10 @@ function keyPressed() {
   else if (key === 'd' || key === 'D') debug = !debug;
   else if (key === 'r' || key === 'R') startNewScene();
   else if (key === 'h' || key === 'H') showLegend = !showLegend;
+  // rychlost simulace: − zpomalí (až slow-motion), + zrychlí; 0 vrátí normál
+  else if (key === '-' || key === '_') simSpeed = max(0.125, simSpeed / 2);
+  else if (key === '+' || key === '=') simSpeed = min(8, simSpeed * 2);
+  else if (key === '0') simSpeed = 1;
 }
 
 function windowResized() {
