@@ -245,6 +245,12 @@ const CONFIG = {
 
   // --- Vizuál ---
   entitySize: 9,             // velikost entity (délka)
+
+  // Pozadí hrací plochy = ztmavený povrch planety z intra.
+  worldBg: {
+    tint: [125, 132, 146],   // násobící tint textury (nižší = tmavší pozadí)
+    muteAlpha: 105,          // krytí tlumicí vrstvy základní barvy přes texturu (vyšší = tmavší/plošší)
+  },
 };
 
 // -------------------------------------------------------------------------
@@ -1737,14 +1743,15 @@ function drawFactionGlyph(x, y, shapeIdx, size, col, alpha) {
 //  entity vyniknou). Boids se tak pohybují "nad povrchem" právě toho světa.
 function drawWorldBackground() {
   if (!planet || !planet.bg) return;
+  const wb = CONFIG.worldBg;
   push();
-  // mírné ztmavení přes tint (násobí barvy) — povrch zůstane čitelný, ale tlumený
-  tint(150, 158, 172);
+  // ztmavení přes tint (násobí barvy) — povrch zůstane čitelný, ale tlumený
+  tint(wb.tint[0], wb.tint[1], wb.tint[2]);
   image(planet.bg, 0, 0, width, height);
   noTint();
-  // jemné ztlumení k základní barvě pozadí, ať textura nepřebíjí entity
+  // ztlumení k základní barvě pozadí, ať textura nepřebíjí entity
   noStroke();
-  fill(CONFIG.background[0], CONFIG.background[1], CONFIG.background[2], 90);
+  fill(CONFIG.background[0], CONFIG.background[1], CONFIG.background[2], wb.muteAlpha);
   rect(0, 0, width, height);
   pop();
 }
