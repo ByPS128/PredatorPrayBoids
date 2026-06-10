@@ -1,5 +1,8 @@
 # Predator–Prey Boids
 
+**▶ Živá ukázka: <https://byps128.github.io/PredatorPrayBoids/>** — běží přímo
+v prohlížeči, nic se neinstaluje.
+
 2D „screensaver" simulace emergentního chování ve stylu boids, napsaná v čistém
 **p5.js** (jedna HTML stránka, žádný build). Na ploše se střetávají barevné
 frakce entit, které spolu spolupracují (stejná barva) i se loví (cizí barva).
