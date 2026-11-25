@@ -3,6 +3,18 @@
 Původní zadání projektu je v [`docs/ZADANI.md`](docs/ZADANI.md). Níže je popis **toho, co je hotové a jak je to
 postavené** — aby se v projektu dalo rychle zorientovat a ladit.
 
+## Pravidla práce (Petr)
+
+- **Každá změna kódu se promítne do `README.md` ve stejném kroku jako kód**, bez připomínání, je to součást hotové
+  práce: popis modelu chování (sekce „Jak to funguje — model chování“) i referenční tabulka konfigurace
+  (sekce „Konfigurace (`CONFIG`)“), když parametr přibude, zmizí nebo změní význam, rozsah či jednotku. Stejně drž
+  v souladu tento soubor a komentáře u polí `CONFIG`.
+- **`TODO.md` je průběžná roadmapa:** hotové označ, nové nápady dej do backlogu.
+- **Návrh mechaniky je otevřený dialog s Petrem a domluví se před kódem:** shrň, jak zadání chápeš, otevřené otázky
+  polož prózou. Drobná čísla neřeš otázkou: zvol rozumný výchozí a řekni, že jde vyladit v `CONFIG`.
+- **Radši znovu použij existující stav a systémy než nový stav** (příklad: `energy` je zároveň život v souboji).
+- Stavěj po pojmenovaných vrstvách a chování lad pozorováním (`−`/`+` zpomalí a zrychlí simulaci).
+
 ## Soubory
 - `index.html` — stránka, načítá p5.js z CDN, `sketch.js`, a zobrazuje horní
   nápovědu kláves.
